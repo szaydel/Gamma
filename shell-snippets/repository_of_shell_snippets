@@ -430,6 +430,9 @@ systool -c fc_host -v | grep port_name | gawk {'print $3'} | sed 's/\"//g'
 ## Get wwid of a block device
 scsi_id -g -u -s /block/sdju
 
+## Map of Block devices to physical Paths
+ls -l /sys/block/*/device
+
 ## List a number of files, based on a pattern, and then read lines from each file and execute a series of commands against those files.
 for N in $(ls /dbss/ora1002/u00/crs/ASMdisks.*[db.fra]) do while IFS= read -r line; do echo ${N} >> /tmp/logfile; echo "multipath -l ${line}" >> /tmp/logfile; done < ${N}; done
 
@@ -460,10 +463,27 @@ tail -f somefile | while read line ; do echo $line  ; sleep 1; done
 inq -nodots -clar_wwn | grep -v "\/dev/sd" | awk '{printf("%s\n",$6)}'
 inq -nodots -clar_wwn | grep -v "\/dev/sd" | awk '{printf("%s\n3",$6)}' | egrep --regex "([0-9]|[a-z]){33}"| sort | uniq > /tmp/all-clar-devs.txt 
 
+## Use sysfs to local ALL paths to a LUN when target and LUN are known
+ls -l /sys/devices/pci0000:00/0000:00:13.0/0000:*:00.*/host0/rport-0:0-*/target[0-3]:0:[0-5]/[0-2]:0:[0-5]:101/block*
+
+## Using Known Target and LUN, we can identify our block devices
+lsscsi -d | grep "0:0:[0-5]:101" | awk '{printf("%s\n",$6)}' | sed -r -e "s/\[([0-9,\:]{1,}\])//g"
+
+## Using Target and LUN information to identify block device files including /dev/disk/by-id|/dev/disk/by-path symlinks
+MYVAR1=$(lsscsi -d | grep "0:0:[0-5]:101" | awk '{printf("%s\n",$6)}' | sed -r -e "s/\[([0-9,\:]{1,}\])//g")
+for A in ${MYVAR1[@]}; do egrep -e "${A}\," /tmp/hw-mep008.txt | egrep -E "/dev/disk/by-id" | sed -e "s/\,//g"; done
+
+## Device path information for a disk
+grep 360060480000190103437533030324343 /tmp/hw-mep006.txt | tr "\," " " | sed -e "s/  */ /g" | awk '{ORS="\n\n"; OFS=" "}{ print $1, $2 }{OFS="\n"}{ print $3, $4, $5 }'
+
+## Properly formatted information for all SCSI disks on the system
+lsscsi -vk | awk '{ if ( ( NR % 2 ) == 0 ) { printf("%s\n",$0) } else { printf("%s ",$0) } }' | sed -e "s/  */ /g" > /tmp/scsi_dev-mep006.txt
 
 ## Collect only Non-Prod disks from /dev/mapper...
 ls /dev/mapper/3600* | egrep -v --regexp="part[0-4]" | cut -d "/" -f4 | egrep -v --regexp="([0-9]{33})" | sort | uniq
 
+## Return bus information for a disk by /dev/sdXXX name
+lsscsi -vk | awk '{ if ( ( NR % 3 ) == 0 ) { printf("%s\n",$0) } else { printf("%s ",$0) } }' | egrep "/dev/sdh$" | sed -e "s/  */ /g" | cut -d " " -f 10-12
 
 ## Query inq for information about disks based on the list of "sdXX" devices with Buffer I/O errors in the "messages" log file
 for I in $(bzcat -c /var/log/messages-20100709.bz2 | egrep "Buffer I/O error on device" | awk '{printf "%s\n", $11}' | sed -e 's/\,//g' | sort | uniq); do grep -h "$I " /tmp/san-sym_wwn-eagnmnmep006.txt /tmp/san-clar_wwn-eagnmnmep006.txt; done
