@@ -487,3 +487,8 @@ lsscsi -vk | awk '{ if ( ( NR % 3 ) == 0 ) { printf("%s\n",$0) } else { printf("
 
 ## Query inq for information about disks based on the list of "sdXX" devices with Buffer I/O errors in the "messages" log file
 for I in $(bzcat -c /var/log/messages-20100709.bz2 | egrep "Buffer I/O error on device" | awk '{printf "%s\n", $11}' | sed -e 's/\,//g' | sort | uniq); do grep -h "$I " /tmp/san-sym_wwn-eagnmnmep006.txt /tmp/san-clar_wwn-eagnmnmep006.txt; done
+
+## Tie 'inq' output for Clariion to ASM diskgroup information using 'oracleasm' command
+NONPROD_ASM_ARRAY=( $(cat /tmp/san-clar_wwn-mep006.txt | egrep -E "sd" | sed -e "s/  */ /g" | cut -d " " -f6 | sed -e "s/^/3/g" | sort -u))
+for DISK in ${NONPROD_ASM_ARRAY[@]}; do oracleasm querydisk /dev/mapper/"${DISK}-part1"; done
+
