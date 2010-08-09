@@ -1,6 +1,23 @@
 #!/bin/bash
 
 ###############################################################################
+### NOTES: ####################################################################
+###############################################################################
+## This script was converted from a ksh version and was fundamentally changed
+## in order to streamline the process, and improve disk verification
+##
+###############################################################################
+### Index/Description of Functions included in Library
+###############################################################################
+##
+###############################################################################
+### Revisions: ################################################################
+###############################################################################
+##
+##
+##
+##
+###############################################################################
 ### Step 1 : Define Variables and Functions used throughout the script
 ###############################################################################
 
@@ -12,6 +29,43 @@ LOG_FILE=/tmp/ASM-disk-setup.${PID}
 LUN_RAW_INPUT_FILE=$@  ## Variable pointing to the path of the input file
 DATESTAMP=$(date "+%Y%m%e")
 DEBUG=1
+
+
+###############################################################################
+################# Major objectives and expected behavior ######################
+###############################################################################
+### IMPORTANT:
+### 1. multipath "MUST" show four paths for each LUN being provisioned
+### 2. we error-out if condition 1 is not met.
+### 3. LUNs could contain letters, we need to make sure that 
+### ALL input from the input file is converted to lowercase
+### 4. strong check is required to make sure LUN is not already used
+### 5. If LUN is in use, and user does not want to re-write the partition
+### table, we exist with the return code 1.
+### 6. all fdisk'ing "MUST" happen against a '/dev/mapper' device
+### 
+###############################################################################
+
+### Build our LUN Array based on RAW input file - testing with /tmp/asm_setup_input.raw
+### We need two ARRAYS one for FRA disks and one for DB disks
+
+### Also we create a variable with the count of LUNs in the list
+### which we will later use to compare against the count of verified LUNs 
+### those which we know have four individual paths
+### 'TOTAL_LUN_COUNT' should contain a sum of LUNs in the two variables :
+### 'DATA_LUN_COUNT' and 'FRA_LUN_COUNT'
+
+## Individual ARRAY for FRA Disks being provisioned to the cluster
+FRA_LUN_LIST=( $(cat "${LUN_RAW_INPUT_FILE}" | tr '[:upper:]' '[:lower:]' | awk '/fra/ {print "3"$NF}' | sort -u) )
+
+## Individual ARRAY for DATA Disks being provisioned to the cluster
+DATA_LUN_LIST=( $(cat "${LUN_RAW_INPUT_FILE}" | tr '[:upper:]' '[:lower:]' | awk '/data/ {print "3"$NF}' | sort -u) )
+
+## We determine a sum of 'DATA_LUN_COUNT' and 'FRA_LUN_COUNT', and substitute '0',
+## if either variable is not present, which may be because only DATA or only
+## FRA LUNs are being provisioned 
+TOTAL_LUN_COUNT=$(( ${#FRA_LUN_LIST[@]} + ${#DATA_LUN_LIST[@]} ))
+
 
 ###############################################################################
 ### Step 1b : Functions called later in the script
@@ -130,41 +184,6 @@ echo partprobe
 multipath -ll > /tmp/multipath.${PID}
 
 
-###############################################################################
-################### Sam's modified version of above ###########################
-###############################################################################
-### IMPORTANT:
-### 1. multipath "MUST" show four paths for each LUN being provisioned
-### 2. we error-out if condition 1 is not met.
-### 3. LUNs could contain letters, we need to make sure that 
-### ALL input from the input file is converted to lowercase
-### 4. strong check is required to make sure LUN is not already used
-### 5. If LUN is in use, and user does not want to re-write the partition
-### table, we exist with the return code 1.
-### 6. all fdisk'ing "MUST" happen against a '/dev/mapper' device
-### 
-###############################################################################
-
-### Build our LUN Array based on RAW input file - testing with /tmp/asm_setup_input.raw
-### We need two ARRAYS one for FRA disks and one for DB disks
-
-### Also we create a variable with the count of LUNs in the list
-### which we will later use to compare against the count of verified LUNs 
-### those which we know have four individual paths
-### 'TOTAL_LUN_COUNT' should contain a sum of LUNs in the two variables :
-### 'DATA_LUN_COUNT' and 'FRA_LUN_COUNT'
-
-## Individual ARRAY for FRA Disks being provisioned to the cluster
-FRA_LUN_LIST=( $(cat "${LUN_RAW_INPUT_FILE}" | tr '[:upper:]' '[:lower:]' | awk '/fra/ {print "3"$NF}' | sort -u) )
-
-## Individual ARRAY for DATA Disks being provisioned to the cluster
-DATA_LUN_LIST=( $(cat "${LUN_RAW_INPUT_FILE}" | tr '[:upper:]' '[:lower:]' | awk '/data/ {print "3"$NF}' | sort -u) )
-
-## We determine a sum of 'DATA_LUN_COUNT' and 'FRA_LUN_COUNT', and substitute '0',
-## if either variable is not present, which may be because only DATA or only
-## FRA LUNs are being provisioned 
-TOTAL_LUN_COUNT=$(( ${#FRA_LUN_LIST[@]} + ${#DATA_LUN_LIST[@]} ))
-
 ### We need to make sure that each supplied LUN is underscored by four paths
 ### on the system, and if not, we need to error out somewhere
 
@@ -193,11 +212,13 @@ for EACH_LUN in ${FRA_LUN_LIST[@]} ${DATA_LUN_LIST[@]}
         COUNTER=$((COUNTER + 1))
     else
         printf "%s\n" "Expected number of paths to LUN ${EACH_LUN} must equal to 4."
-        return 1
+        RET_CODE=1
     fi
     done
 [ "${DEBUG}" = "1" ] && printf "%s\n" "Counter is currently at ${COUNTER}"
-}  
+
+return "${RET_CODE}"
+}
 
 check_if_LUN_partitioned ()
 
@@ -277,11 +298,12 @@ done
 ## and adds newly created partitions to the system
 
 multipath -v2
+RET_CODE=0
 
 for EACH_LUN in ${FRA_LUN_LIST[@]} ${DATA_LUN_LIST[@]}
 
 do 
-   	kpartx -a -p -part /dev/mapper/${EACH_LUN}; RET_CODE=$?
+   	kpartx -a -p -part /dev/mapper/${EACH_LUN};
 
 ## Here we check whether or not block-device abd symlink were created
 ## A warning is printed if the mpath block device or symlink missing
@@ -353,17 +375,30 @@ partition_each_LUN; RET_CODE=$?
 [ "${DEBUG}" = "1" ] && printf "%s\n" "LUN Partitioning Function Return Code: ${RET_CODE}"
 
 if [[ "${RET_CODE}" != "0" ]]; then
-    clear
-    printf "%s\n\n" "Error was encountered and you chose to abort."
-    printf "%s\n" "###############################################################################"
-    printf "%s\n" "Please, manually re-check LUNs with which errors were encountered."
-    printf "%s\n" "###############################################################################"
-    
-    filecleanup  ## We make sure that any files that we create are removed upon exit
-    exit "${RET_CODE}"
-else
-    printf "%s\n" "All LUNs were partitioned. Continuing..."
-    # sleep 15
+        clear
+        printf "%s\n\n" "Error was encountered and you chose to abort."
+        printf "%s\n" "###############################################################################"
+        printf "%s\n" "Please, manually re-check LUNs with which errors were encountered."
+        printf "%s\n" "###############################################################################"
+        filecleanup  ## We make sure that any files that we create are removed upon exit
+        exit "${RET_CODE}"
+    else
+        printf "%s\n" "All LUNs were partitioned. Continuing..."
+        # sleep 15
+fi
+
+device_map_create_each_LUN; RET_CODE=$?
+[ "${DEBUG}" = "1" ] && printf "%s\n" "DM and Symlink Creation Function Return Code: ${RET_CODE}"
+
+if [[ "${RET_CODE}" != "0" ]]; then
+        clear
+        printf "%s\n" "###############################################################################"
+        printf "%s\n" "Created DM Devices and Symlinks, but some errors were encountered."
+        printf "%s\n" "###############################################################################"
+    else
+        printf "%s\n" "###############################################################################"
+        printf "%s\n" "Created DM Devices and Symlinks without any errors."
+        printf "%s\n" "###############################################################################"
 fi
 
 ###############################################################################
