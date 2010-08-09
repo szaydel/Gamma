@@ -155,10 +155,10 @@ multipath -ll > /tmp/multipath.${PID}
 ### 'DATA_LUN_COUNT' and 'FRA_LUN_COUNT'
 
 ## Individual ARRAY for FRA Disks being provisioned to the cluster
-FRA_LUN_LIST=($(grep -i fra ${LUN_RAW_INPUT_FILE} | awk '{print "3"$NF}' | tr '[:upper:]' '[:lower:]'))
+FRA_LUN_LIST=( $(cat "${LUN_RAW_INPUT_FILE}" | tr '[:upper:]' '[:lower:]' | awk '/fra/ {print "3"$NF}' | sort -u) )
 
 ## Individual ARRAY for DATA Disks being provisioned to the cluster
-DATA_LUN_LIST=($(grep -i data "${LUN_RAW_INPUT_FILE}" | awk '{print "3"$NF}' | tr '[:upper:]' '[:lower:]'))
+DATA_LUN_LIST=( $(cat "${LUN_RAW_INPUT_FILE}" | tr '[:upper:]' '[:lower:]' | awk '/data/ {print "3"$NF}' | sort -u) )
 
 ## We determine a sum of 'DATA_LUN_COUNT' and 'FRA_LUN_COUNT', and substitute '0',
 ## if either variable is not present, which may be because only DATA or only
