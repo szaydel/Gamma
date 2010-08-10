@@ -1,5 +1,4 @@
 #!/bin/bash
-
 ###############################################################################
 ### NOTES: ####################################################################
 ###############################################################################
@@ -13,24 +12,10 @@
 ###############################################################################
 ### Revisions: ################################################################
 ###############################################################################
+## 08/01/2010 - Script is in alpha stage with revisions ongoing.
 ##
 ##
 ##
-##
-###############################################################################
-### Step 1 : Define Variables and Functions used throughout the script
-###############################################################################
-
-###############################################################################
-### Step 1a : Variables used globally in the script
-###############################################################################
-PID=$$
-LOG_FILE=/tmp/ASM-disk-setup.${PID}
-LUN_RAW_INPUT_FILE=$@  ## Variable pointing to the path of the input file
-DATESTAMP=$(date "+%Y%m%e")
-DEBUG=1
-
-
 ###############################################################################
 ################# Major objectives and expected behavior ######################
 ###############################################################################
@@ -45,6 +30,20 @@ DEBUG=1
 ### 6. all fdisk'ing "MUST" happen against a '/dev/mapper' device
 ### 
 ###############################################################################
+
+###############################################################################
+### Step 1 : Define Variables and Functions used throughout the script
+###############################################################################
+
+###############################################################################
+### Step 1a : Variables used globally in the script
+###############################################################################
+
+PID=$$
+LOG_FILE=/tmp/ASM-disk-setup.${PID}
+LUN_RAW_INPUT_FILE=$@  ## Variable pointing to the path of the input file
+DATESTAMP=$(date "+%Y%m%e")
+DEBUG=1
 
 ### Build our LUN Array based on RAW input file - testing with /tmp/asm_setup_input.raw
 ### We need two ARRAYS one for FRA disks and one for DB disks
@@ -157,24 +156,24 @@ EOF
 ## while we are partitioning a LUN
 ## We want to give user a choice to continue or to stop
   
-    if [[ "${RET_CODE}" -ne "0" ]]; then
+    if [[ ! "${RET_CODE}" = "0" ]]; then
         
         clear
         printf "%s\n" "ERROR: Something went wrong while Partitioning New LUN"
         printf "%s %5s\n\n\n" "LUN:" "${EACH_LUN}"
         printf "%s" "Do you want to continue [y], or stop here and troubleshoot [n]? [y/n] "
         read "ANS"
-        [ -z "${ANS}" ] &&         
-        
-        [[ "${ANS}" =~ [Yy] ]] && ( printf "%s\n" "Continuing..."; sleep 2 )
-        [[ "${ANS}" =~ [Nn] ]] && ( printf "%s\n" "Aborting Partitioning..."; sleep 2 )
-
-         if  [[ ! "${ANS}" =~ [Yy] ]]; then                            
-                RET_CODE=1
-                break                
-            else
-                RET_CODE=0            
-        fi                       
+        ## If no answer is supplied we will assume the answer is no
+        if  [[ "${ANS}" =~ [Yy] ]]; then
+            printf "%s\n" "Continuing..."
+            sleep 2
+            RET_CODE=0
+        elif [[ -z "${ANS}" || "${ANS}" =~ [Nn] ]]; then
+            printf "%s\n" "Aborting Partitioning..."
+            sleep 2
+            RET_CODE=1
+            break
+        fi
     fi
 done
 return "${RET_CODE}"
@@ -351,22 +350,22 @@ fi
 check_if_LUN_partitioned; RET_CODE=$?
 [ "${DEBUG}" = "1" ] && printf "%s\n" "LUN MBR Check Function Return Code: ${RET_CODE}"
 
-if [[ "${RET_CODE}" != "0" ]]; then
-    clear
-    printf "%s\n\n" "One or more LUNs already partitioned. You chose not to continue with re-partitioning."
-    printf "%s\n" "###############################################################################"
-    printf "%s\n" "ASM Provisioning of the following LUNs was cancelled..."
-    printf "%s\n" "###############################################################################"
-    printf "%s\n" "${FRA_LUN_LIST[@]}" "${DATA_LUN_LIST[@]}"
-    printf "%s\n\n" "###############################################################################"
-    printf "%s\n" "" "Please, re-check the LUN(s), and adjust input file, if LUN(s) should be excluded."
-    
-    filecleanup  ## We make sure that any files that we create are removed upon exit
-    exit "${RET_CODE}"
-else
-    printf "%s\n" "All LUNs were verified as OK to re-partition. Continuing..."
-    sleep 5
-fi
+    if [[ "${RET_CODE}" != "0" ]]; then
+            clear
+            printf "%s\n\n" "One or more LUNs already partitioned. You chose not to continue with re-partitioning."
+            printf "%s\n" "###############################################################################"
+            printf "%s\n" "ASM Provisioning of the following LUNs was cancelled..."
+            printf "%s\n" "###############################################################################"
+            printf "%s\n" "${FRA_LUN_LIST[@]}" "${DATA_LUN_LIST[@]}"
+            printf "%s\n\n" "###############################################################################"
+            printf "%s\n" "" "Please, re-check the LUN(s), and adjust input file, if LUN(s) should be excluded."
+            
+            filecleanup  ## We make sure that any files that we create are removed upon exit
+            exit "${RET_CODE}"
+        else
+            printf "%s\n" "All LUNs were verified as OK to re-partition. Continuing..."
+            sleep 5
+    fi
 
 ### This is where we execute our partitioning function used to create one
 ### partition covering the whole disk 
@@ -393,11 +392,11 @@ device_map_create_each_LUN; RET_CODE=$?
 if [[ "${RET_CODE}" != "0" ]]; then
         clear
         printf "%s\n" "###############################################################################"
-        printf "%s\n" "Created DM Devices and Symlinks, but some errors were encountered."
+        printf "%s\n" "Warning: Created DM Devices and Symlinks, but some errors were encountered."
         printf "%s\n" "###############################################################################"
     else
         printf "%s\n" "###############################################################################"
-        printf "%s\n" "Created DM Devices and Symlinks without any errors."
+        printf "%s\n" "Success: Created DM Devices and Symlinks without any errors."
         printf "%s\n" "###############################################################################"
 fi
 
