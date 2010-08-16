@@ -13,7 +13,7 @@
 ### Revisions: ################################################################
 ###############################################################################
 ## 08/01/2010 - Script is in alpha stage with revisions ongoing.
-##
+## 08/16/2010 - Need to develop a logging mechanism, no logging at the moment.
 ##
 ##
 ###############################################################################
@@ -36,7 +36,74 @@
 ###############################################################################
 
 ###############################################################################
-### Step 1a : Variables used globally in the script
+### Step 1a : Initialization functions required to setup script functionality
+###############################################################################
+
+usage() {
+	printf "%s\n\n" "setupASMDisks_SUSE.sh - used to setup partitioning of LUNs for use under ASM"
+	printf "%s\n" "Usage:"
+    printf "\t%s\n\n" "Run ./setupASMDisk.ksh [-f] /path/to/file"
+	printf "\t%s\n" "[-f] Force setup of previously partitioned LUNs" "[-h] Will return this usage menu"
+	printf "\t%s\n" "[-u] Will only update ASM configuration on nodes other than one where LUNs were added"
+}
+ 
+filecleanup() {
+# Clean up temp files
+printf "%s\n" "Cleaning up temporary files ..."
+rm -f /tmp/fdisk.setup.cmds.${PID}
+rm -f /tmp/multipath.${PID}
+rm -f /tmp/set_ASM_perms.${PID}
+}
+
+# Check check and set arguments
+force=""
+while getopts "ufhH" ARGS
+do
+	case ${ARGS} in
+		f)
+			force="yes"
+			;;
+        u)
+            SCAN_ONLY="yes"
+			;;
+	h|H|*)
+			usage
+			exit 1
+			;;
+	esac
+done
+
+# Check for file(s) passed
+shift $(($OPTIND - 1))
+
+if [[ "${SCAN_ONLY}" = "yes" ]]; then
+    clear
+    printf "%s\n" "###############################################################################"    
+    printf "%s\n" "Updating Oracle ASM after New LUNs were provisioned on another node..."
+    printf "%s\n" "###############################################################################" 
+    oracleasm scandisks > /dev/null 2>&1;
+    filecleanup
+    exit 0
+fi
+
+if [[ $# -lt 1 ]]; then
+	usage
+	printf "%s\n" "ERROR: no files specified"
+	exit 1
+fi
+
+if [[ $# -gt 1 ]]; then
+	usage
+	printf "%s\n" "ERROR: multiple files specified:"
+	for f in "$@"
+	do
+		echo "${f}"
+	done
+	exit 1
+fi
+
+###############################################################################
+### Step 1b : Variables used globally in the script
 ###############################################################################
 
 PID=$$
@@ -65,57 +132,10 @@ DATA_LUN_LIST=( $(cat "${LUN_RAW_INPUT_FILE}" | tr '[:upper:]' '[:lower:]' | awk
 ## FRA LUNs are being provisioned 
 TOTAL_LUN_COUNT=$(( ${#FRA_LUN_LIST[@]} + ${#DATA_LUN_LIST[@]} ))
 
-
 ###############################################################################
-### Step 1b : Functions called later in the script
+### Step 1c : Functions called later in the script
 ###############################################################################
 
-usage() {
-	print "setASMDisk.ksh - used to setup partitioning of disks for use in ASM"
-	print "Usage: setupASMDisk.ksh [-f] /path/to/file"
-	print "   -f   Force setup of disks that are already labelled"
-}
- 
-filecleanup() {
-        # Clean up temp files
-        echo "Cleaning up temporary files ..."
-        rm -f /tmp/fdisk.setup.cmds.${PID}
-	rm -f /tmp/multipath.${PID}
-	rm -f /tmp/set_ASM_perms.${PID}
-}
-
-# Check check and set arguments
-force=""
-while getopts "fhH" arg
-do
-	case $arg in
-		f)
-			force="yes"
-			;;
-		h|H|*)
-			usage
-			exit 1
-			;;
-	esac
-done
-
-# Check for file(s) passed
-shift $(($OPTIND - 1))
-if [[ $# -lt 1 ]]; then
-	usage
-	print "ERROR: no files specified"
-	exit 1
-fi
-
-if [[ $# -gt 1 ]]; then
-	usage
-	print "ERROR: multiple files specified:"
-	for f in "$@"
-	do
-		echo "${f}"
-	done
-	exit 1
-fi
 
 ###############################################################################
 ## BEGIN Tested Block of code 07/27/2010 
@@ -139,7 +159,7 @@ do
     printf "%s\n" "Applying New Partition Table to LUN ${EACH_LUN}"   
     unset ANS
     
-fdisk "/dev/mapper/${EACH_LUN}" <<EOF
+fdisk "/dev/mapper/${EACH_LUN}" <<EOF 1> /dev/null 2&>1;
 o
 n
 p
@@ -160,7 +180,8 @@ EOF
         
         clear
         printf "%s\n" "ERROR: Something went wrong while Partitioning New LUN"
-        printf "%s %5s\n\n\n" "LUN:" "${EACH_LUN}"
+        printf "\t%s\n" "LUN:" "${EACH_LUN}"
+        printf "\t%s\n\n" "Possible Cause: fdisk not being able to re-read the Partition Table"
         printf "%s" "Do you want to continue [y], or stop here and troubleshoot [n]? [y/n] "
         read "ANS"
         ## If no answer is supplied we will assume the answer is no
@@ -179,9 +200,8 @@ done
 return "${RET_CODE}"
 }
 
-echo partprobe
-multipath -ll > /tmp/multipath.${PID}
-
+### Doing partprobe at this stage should be unneccessary
+## partprobe
 
 ### We need to make sure that each supplied LUN is underscored by four paths
 ### on the system, and if not, we need to error out somewhere
@@ -216,7 +236,7 @@ for EACH_LUN in ${FRA_LUN_LIST[@]} ${DATA_LUN_LIST[@]}
     done
 [ "${DEBUG}" = "1" ] && printf "%s\n" "Counter is currently at ${COUNTER}"
 
-return "${RET_CODE}"
+return "${RET_CODE:=0}"
 }
 
 check_if_LUN_partitioned ()
@@ -235,7 +255,7 @@ do
 
             printf "%s\n"
     		printf "%s\n" "WARNING: ${EACH_LUN} is already partitioned."
-    		printf "Do you want to view the disk partitioning? [y/n] "
+    		printf "\t%s" "Do you want to view the disk partitioning? [y/n] "
     		read "ANS"
     
             if [[ ${ANS} == "y" || ${ANS} == "Y" ]]; then
@@ -277,33 +297,43 @@ device_map_create_each_LUN ()
 for EACH_LUN in ${FRA_LUN_LIST[@]} ${DATA_LUN_LIST[@]}
 
 do   
-    printf "%s\n\n" "Flushing MPATH and Creating New Mappings for Partitions on LUN: ${EACH_LUN}"   
+    ## printf "%s\n" "Flushing MPATH and Creating New Mappings for Partitions on LUN: ${EACH_LUN}"   
 
-    [ "${DEBUG}" = "1" ] &&  printf "%s\n" "Executing multipath -f ${EACH_LUN}"    
-    multipath -f "${EACH_LUN}"; RET_CODE=$?
+    [ "${DEBUG}" = "1" ] &&  printf "%s\n" "Executing multipath -f ${EACH_LUN}"
+    multipath -f "${EACH_LUN}" > /dev/null 2>&1; multipath -l "{EACH_LUN}" > /dev/null 2>&1;
+    ## Success from multipath -f "LUN" always returns "1", as such we need to make sure
+    ## That we can correctly identify whether multipath was really successful, and it if was
+    ## We want to finx the return code to be "0" instead of "1"
+    RET_CODE=$?; RET_CODE="${RET_CODE:+0}"
 
 	if [[ ! "${RET_CODE}" = "0" ]]; then
+            printf "%s\n"
             printf "%s\n" "###############################################################################"
             printf "%s\n" "ERROR: Multipathd encountered a problem with LUN" "LUN: ${EACH_LUN}"
             printf "%s\n" "###############################################################################"
+            sleep 2
 		else
+		    printf "%s\n"
             printf "%s\n" "###############################################################################"
-            printf "%s\n" "Success: Flushed Multipathd and Device-Mapper for LUN" "LUN: ${EACH_LUN}"            
+            printf "%s\n" "SUCCESS: Flushed Multipathd and Device-Mapper for LUN" "LUN: ${EACH_LUN}"            
             printf "%s\n" "###############################################################################"
+            sleep 2
 	fi
 done
 
 ## We need to update multipath to make sure that it picks-up LUNs we flushed
 ## and adds newly created partitions to the system
 
-multipath -v2
+clear
+printf "%s\n" "Please, be patient... Gathering information from multipath."
+multipath -v2 >> "${LOG_FILE}"
 RET_CODE=0
 
 for EACH_LUN in ${FRA_LUN_LIST[@]} ${DATA_LUN_LIST[@]}
 
 do 
    	kpartx -a -p -part /dev/mapper/${EACH_LUN};
-
+    sleep 4
 ## Here we check whether or not block-device abd symlink were created
 ## A warning is printed if the mpath block device or symlink missing
 
@@ -312,12 +342,16 @@ do
             printf "%s\n" "ERROR: DM Device or Symlink creation with kpartx failed for LUN" "LUN: ${EACH_LUN}"
             printf "%s\n" "###############################################################################"
             printf "%s\n" "This issue will need to be resolved manually."
+            sleep 2
+            
             [ "{DEBUG}" = "1" ] && stat "/dev/mapper/${EACH_LUN}-part1" "/dev/disk/by-id/scsi-${EACH_LUN}-part1"
             RET_CODE=1
         else
+            printf "%s\n"
             printf "%s\n" "###############################################################################"            
             printf "%s\n" "Success: Created DM-Device and Symlink for LUN" "LUN: ${EACH_LUN}"
             printf "%s\n" "###############################################################################"
+            sleep 2
     fi
 	
 done
@@ -325,10 +359,60 @@ done
 return "${RET_CODE}"
 }
 
+
+add_LUN_to_ASM ()
+
+{
+for EACH_LUN in ${DATA_LUN_LIST[@]}
+
+do 
+
+    LUN_LABEL=$(printf "${EACH_LUN}" | awk '{print toupper(substr($1, 17, 17))}')
+    /usr/sbin/oracleasm createdisk "DB_${LUN_LABEL}" /dev/mapper/${EACH_LUN}-part1; ## false
+
+	if [[ ! "$?" = "0" ]]; then
+        printf "%s\n" "###############################################################################"
+	    printf "%s\n" "ERROR: Failed to add DATA LUN to Oracle ASM" "LUN: ${EACH_LUN}"
+        printf "%s\n" "###############################################################################"	
+	    RET_CODE=1
+	fi
+	
+done
+
+for EACH_LUN in ${FRA_LUN_LIST[@]}
+
+do 
+
+    LUN_LABEL=$(printf "${EACH_LUN}" | awk '{print toupper(substr($1, 17, 17))}')
+    /usr/sbin/oracleasm createdisk "FRA_${LUN_LABEL}" /dev/mapper/${EACH_LUN}-part1; ## false
+
+	if [[ ! "$?" = "0" ]]; then
+        printf "%s\n" "###############################################################################"
+	    printf "%s\n" "ERROR: Failed to add FRA LUN to Oracle ASM" "LUN: ${EACH_LUN}"
+        printf "%s\n" "###############################################################################"
+	    RET_CODE=1
+	fi
+
+done
+
+return "${RET_CODE:=0}"
+}
+
+###############################################################################
+### Step 2 : Begin Execution of Main part of the script
+###############################################################################
+
+## If we passed the update option to the script, we are only going to scan ASM
+## to update node's ASM configuration, assming LUNs were already provisioned
+## on another node in the cluster
+
+multipath -v2
+multipath -ll > /tmp/multipath.${PID}
+
 ### This is where we execute our verification function to confirm that
 ### we have correct number of paths for each LUN, if we do not,
 ### we are going to exit at this point to allow for manual troubleshooting
-verify_lun_number_of_paths >> "${LOG_FILE}" 2&>1; RET_CODE=$?
+verify_lun_number_of_paths; RET_CODE=$?; [ ! "${RET_CODE}" = "0" ]] && WARN_ON_EXIT=Y
 
 [ "${DEBUG}" = "1" ] && printf "%s\n" "Total LUN Count is ${TOTAL_LUN_COUNT} Counter is at ${COUNTER}"
 
@@ -340,7 +424,7 @@ if [[ "${TOTAL_LUN_COUNT}"  != "${COUNTER}" ]]; then
     exit "${RET_CODE}"
 else
     printf "%s\n" "All LUNs being Provisioned have correct number of paths. Continuing..."
-    sleep 5
+    sleep 2
 fi
 
 ### This is where we execute our partition verification function to check
@@ -354,9 +438,8 @@ check_if_LUN_partitioned; RET_CODE=$?
             clear
             printf "%s\n\n" "One or more LUNs already partitioned. You chose not to continue with re-partitioning."
             printf "%s\n" "###############################################################################"
-            printf "%s\n" "ASM Provisioning of the following LUNs was cancelled..."
-            printf "%s\n" "###############################################################################"
-            printf "%s\n" "${FRA_LUN_LIST[@]}" "${DATA_LUN_LIST[@]}"
+            printf "%s\n" "ASM Provisioning of the following LUNs was cancelled...:"
+            printf "\t%s\n" "${FRA_LUN_LIST[@]}" "${DATA_LUN_LIST[@]}"
             printf "%s\n\n" "###############################################################################"
             printf "%s\n" "" "Please, re-check the LUN(s), and adjust input file, if LUN(s) should be excluded."
             
@@ -364,7 +447,7 @@ check_if_LUN_partitioned; RET_CODE=$?
             exit "${RET_CODE}"
         else
             printf "%s\n" "All LUNs were verified as OK to re-partition. Continuing..."
-            sleep 5
+            sleep 2
     fi
 
 ### This is where we execute our partitioning function used to create one
@@ -386,201 +469,54 @@ if [[ "${RET_CODE}" != "0" ]]; then
         # sleep 15
 fi
 
-device_map_create_each_LUN; RET_CODE=$?
-[ "${DEBUG}" = "1" ] && printf "%s\n" "DM and Symlink Creation Function Return Code: ${RET_CODE}"
+device_map_create_each_LUN; RET_CODE=$?; [[ ! "${RET_CODE}" = "0" ]] && WARN_ON_EXIT=Y
 
 if [[ "${RET_CODE}" != "0" ]]; then
         clear
         printf "%s\n" "###############################################################################"
-        printf "%s\n" "Warning: Created DM Devices and Symlinks, but some errors were encountered."
+        printf "%s\n" "WARNING: Created DM Devices and Symlinks, but some errors were encountered."
         printf "%s\n" "###############################################################################"
     else
         printf "%s\n" "###############################################################################"
-        printf "%s\n" "Success: Created DM Devices and Symlinks without any errors."
+        printf "%s\n" "SUCCESS: Created DM Devices and Symlinks without any errors."
         printf "%s\n" "###############################################################################"
 fi
+
+[ "${DEBUG}" = "1" ] && printf "%s\n" "DM and Symlink Creation Function Return Code: ${RET_CODE}"
+
+add_LUN_to_ASM; RET_CODE=$?; [[ ! "${RET_CODE}" = "0" ]] && WARN_ON_EXIT=Y
+
+if [[ "${RET_CODE}" != "0" ]]; then
+        clear
+        printf "%s\n" "###############################################################################"
+        printf "%s\n" "WARNING: At least one LUN was not added to Oracle ASM."
+        printf "%s\n" "###############################################################################"
+    else
+        printf "%s\n" "###############################################################################"
+        printf "%s\n" "SUCCESS: Configured all LUNs under Oracle ASM."
+        printf "%s\n" "###############################################################################"
+fi
+
+[ "${DEBUG}" = "1" ] && printf "%s\n" "LUN ASM Config Function Return Code: ${RET_CODE}"
 
 ###############################################################################
 ## END Tested Block of code 07/23/2010
 ###############################################################################
 
-###############################################################################
-## BEGIN : Exiting early while testing the script
-###############################################################################
-
-exit
-
-###############################################################################
-## END : Exiting early while testing the script
-###############################################################################
-
-
-
-
-# DEBUG: Print varibles so far
-#COUNTER=0
-#while [[ $LUNCOUNT -gt $COUNTER ]]; do
-#	echo ${SINGLEPATH[${COUNTER}]}
-#	echo ${WWN[${COUNTER}]}
-#	echo "" 
-#	COUNTER=`echo ${COUNTER}+1 | bc`
-#done
-#filecleanup
-#exit
-
-# Check that COUNTER matches amount of LUNs in list
-# if [[ $COUNTER -ne $LUNCOUNT ]]; then
-#	echo "ERROR: Not all LUNs provided were matched"
-#	echo "Number of LUNs provided: ${LUNCOUNT}"
-#	echo "Number of paths found: ${COUNTER}"
-#	filecleanup
-#	exit 1
-# fi
-
-# Create files with fdisk commands we will/may use later
-# cat > /tmp/fdisk.setup.cmds.${PID} << EOF
-#o
-#n
-#p
-#1
-#
-#
-#w
-#EOF
-
-# Add check that all paths in multipath have same partition layout
-
-### We are going to be acting on the multipathed device, not an individual path
-### When individual paths instead of the device-mapper device are used we run
-### into a situation where the kernel does not get updated correctly
-
-## Here we test the LUN against two conditions, to make sure that it does not
-## actually have a partition table on it
-## The conditions which we test against are :
-## 1. When we use 'parted', and grep for "msdos" or "type=83"  do we return
-## a positive result and if so we do an additional check
-## 2. We check that 'sfdisk' returns "four" lines when we query the disk
-## this indicates that we have a standard msdos partition table on the disk 
-
-
-# Partitions may have been modified, run partprobe
-partprobe
-
-clear
-
-# fdisk each disk
-# echo ""
-# echo "Execute fdisk on all disks ..."
-# COUNTER=0
-# while [[ $LUNCOUNT -gt $COUNTER ]]; do
-#	echo ""
-# echo "Executing fdisk on ${SINGLEPATH[${COUNTER}]} ..."
-#
-#	fdisk ${SINGLEPATH[${COUNTER}]} < /tmp/fdisk.setup.cmds.${PID}
-#	if [[ $? -ne 0 ]]; then
-#		echo "ERROR: fdisk received error on"
-#		echo "SINGLEPATH: ${SINGLEPATH[${COUNTER}]}"
-#		echo "WWN: ${WWN[${COUNTER}]}"
-#		echo "ERROR: Please check that manually"
-#		echo ""
-#	else
-#		dd if=/dev/zero of=${SINGLEPATH[${COUNTER}]}1 bs=1M count=100
-#	fi
-#
-#	COUNTER=`echo ${COUNTER}+1 | bc`
-#done
-
-# Partitions have been modified, run partprobe
-## This should not be necessary, when using fdisk against /dev/mapper device
-## and during testing it appears that after fdisk 
-## partprobe
-
-# Check partitions match up
-
-# kpartx to add multipath devices
-COUNTER=0
-while [[ $LUNCOUNT -gt $COUNTER ]]; do
-	echo ""
-	echo "Executing kpartx for ${WWN[${COUNTER}]} ..."
-	kpartx -d /dev/mapper/${WWN[${COUNTER}]}
-	kpartx -a -p -part /dev/mapper/${WWN[${COUNTER}]}
-	if [[ $? -ne 0 ]]; then
-		echo ""
-		echo "ERROR: kpartx received error on"
-		echo "WWN: ${WWN[${COUNTER}]}"
-		echo "Reboot may be needed"
-	fi
-
-	# Check that new path was created
-	if [[ ! -a /dev/mapper/${WWN[${COUNTER}]}-part1 ]]; then
-		echo ""
-		echo "ERROR: multipath for new partition not created at /dev/mapper/${WWN[${COUNTER}]}-part1"
-		echo "Reboot may be needed"
-	fi
-	if [[ ! -L /dev/disk/by-name/${WWN[${COUNTER}]}-part1 ]]; then
-		echo ""
-		echo "ERROR: multipath for new partition not created at /dev/disk/by-name/${WWN[${COUNTER}]}-part1"
-		echo "Reboot may be needed"
-	fi
-	COUNTER=`echo ${COUNTER}+1 | bc`
-done
-
-# Create file for setting permissions
-echo ""
-echo "Creating startup script to set ASM disk permissions ..."
-COUNTER=0
-> /tmp/set_ASM_perms.${PID}
-cat > /tmp/set_ASM_perms.${PID} << EOF
-### BEGIN INIT INFO
-# Provides:          set_ASM_perms
-# Required-Start:    multipathd
-# Should-Start: 
-# Required-Stop:
-# Should-Stop:
-# Default-Start:     3 5
-# Default-Stop:      0 1 2 6
-# Short-Description: Sets permissions for ASM disks
-# Description:       Sets permissions for ASM disks
-### END INIT INFO
-
-case "\$1" in
-	start)
-
-EOF
-while [[ $LUNCOUNT -gt $COUNTER ]]; do
-	echo "chown oracle:dba /dev/mapper/${WWN[${COUNTER}]}-part1" >> /tmp/set_ASM_perms.${PID}
-	echo "chmod 660 /dev/mapper/${WWN[${COUNTER}]}-part1" >> /tmp/set_ASM_perms.${PID}
-	echo "chown oracle:dba /dev/disk/by-name/${WWN[${COUNTER}]}-part1" >> /tmp/set_ASM_perms.${PID}
-	echo "chmod 660 /dev/disk/by-name/${WWN[${COUNTER}]}-part1" >> /tmp/set_ASM_perms.${PID}
-
-	COUNTER=`echo ${COUNTER}+1 | bc`
-done
-cat >> /tmp/set_ASM_perms.${PID} << EOF
-
-	;;
-	*)
-		echo "Usage: $0 {start}"
-		exit 1
-        ;;
-esac
-EOF
-
-
-# Setup disks into ASMLib
-COUNTER=0
-while [[ $LUNCOUNT -gt $COUNTER ]]; do
-	NAME_TEMP="`echo ${WWN[${COUNTER}]} | awk '{print substr($1, 17, 17)}'`"
-
-	/etc/init.d/oracleasm createdisk ${DISK_TYPE}_${NAME_TEMP} /dev/mapper/${WWN[${COUNTER}]}-part1
-
-	COUNTER=`echo ${COUNTER}+1 | bc`
-done
 
 # List out ASMLib disks
-echo "Listing out disks setup into ASMLib:"
-/etc/init.d/oracleasm listdisks
-
+# echo "Listing out disks setup into ASMLib:"
+# /etc/init.d/oracleasm listdisks
+#
 ## Function defined at the beginning of the script
 filecleanup
-echo "Disk setup complete"
-echo ""
+
+printf "%s" "Completed setup of New LUNs..." 
+
+if [[ "${WARN_ON_EXIT}" = "Y" ]]; then
+        printf "%s\n" " However some issues were encountered."
+        exit 1
+    else
+        exit 0
+fi
+
