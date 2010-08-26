@@ -1,0 +1,79 @@
+get-server-by-eir ()
+{
+
+local GREP_OPTIONS="-r -E --color=never"
+## local DEBUG="0"      ## Not used in this function
+local DIV=$(printf "%80s\n"|tr ' ' - )
+local THIS_HOST=$(hostname)
+local EACH_HOST=""
+local EIR_NUM=""
+local INFODIR=/sa/info/services/incoming
+local PREVIOUS_WORKDIR=${OLDPWD}
+
+## Modify HCSINFO_FIELDS to your liking, in order to get the information
+## that you may want out of hcs.info
+local HCSINFO_FIELDS="hcsServiceDetail|hcsServiceApp|hcsServiceEnv|hcsServiceIP|hcsServiceTeam"
+local PREFIX="hcsservices-hostinfo-"
+unset HOST_ARRAY
+
+
+## If EIR number is not 4 digits long, function 
+while [[ -z "${EIR_NUM}" ]]; 
+    do
+clear; printf "%s" "Please enter Application EIR Number (i.e. 1111): "
+        read EIR_NUM
+        if [[ "${EIR_NUM}" =~ ^[0-9]+$ ]] && [[ "${#EIR_NUM}" -eq "4" ]];
+            then 
+                printf "%s\n" "Valid Format... Checking... Please be patient..."
+                local FILENAME="/tmp/${EIR_NUM}.service.info"
+            else
+                printf "%s\n" "Invalid Format... Try Again..."; sleep 2
+                unset EIR_NUM
+        fi
+    done  
+#
+#    local SEC_MENU_ITEM=$(echo "${SEC_MENU_ITEM}" | tr [:upper:] [:lower:] )
+
+cd "${INFODIR}"
+
+## We first build an Array with list of servers that we find for the EIR_NUM
+## which we supplied at the beginning of the function
+## The last section looks weird, but it is necessary to deal with AutoAudit,
+## just in case AutoAudit cought your local system, and captured output of 'ps'
+## which is then stored in one of the files which of course we query here, and
+## it may give us a false positive
+
+local HOST_ARRAY=( $(find . -name "${PREFIX}*" -exec egrep --regexp="hcsServiceEIR='${EIR_NUM}'" -ls {} \; | sed -e 's/\.\///g' -e 's/[-_]/ /g' | awk '{print $3}' | grep -v "${THIS_HOST}" ))
+
+## This looks weird, but it is necessary, just in case AutoAudit cought your
+## local system, and captured output of 'ps' 
+
+if [[ ${#HOST_ARRAY[@]} -le "1" ]]; 
+    then
+        printf "%s\n" "Unable to locate any servers for given EIR # ${EIR_NUM} Cowardly bailing..."
+        return 1
+fi
+
+## We format and present output here, we also send a copy of the server list
+## which we store in HOST_ARRAY to a file FILENAME
+printf "%s\n\n"
+printf "%s\n" "Servers that appear to belong to EIR # ${EIR_NUM}" 
+printf "%s\n" "${HOST_ARRAY[@]}" | tee "${FILENAME}"
+printf "%s\n\n"
+
+for EACH_HOST in "${HOST_ARRAY[@]}"
+    do
+        printf "%s\n" ${DIV}
+        printf "\t%s\n" ">>>> BEGIN hcs.info Details for host: ${EACH_HOST} <<<<"
+        printf "%s\n" ${DIV}
+        egrep \""${HCSINFO_FIELDS}"\" "${PREFIX}""${EACH_HOST}"_* | sed -e 's/\#\#.*\#\#//g' -e 's/  *//g'
+        printf "%s\n" ${DIV}
+        printf "\t%s\n" ">>>> END hcs.info Details for host: ${EACH_HOST} <<<<"
+        printf "%s\n" ${DIV}        
+        printf "%s\n\n"
+    done
+
+## Return to our previous work directory
+cd "${PREVIOUS_WORKDIR}"
+return 0
+}
