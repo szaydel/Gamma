@@ -1,8 +1,25 @@
-##
 get-server-by-eir ()
+###-------------------------------------------------------------------------###
+#### Do not run this on the system tied to an EIR you are trying to check #####
+###-------------------------------------------------------------------------###
+## Your milage may vary with regard to how quickly results are returned
+## A lot depends on the responsiveness of NFS, and the shear number of files
+## that are scanned while the array is being built
+
 {
+local MYOS=$(uname)
+
+## We need to make sure that we are running Linux and
+## that bash is our current shell
+## If OS is not linux, or you are not in bash, need to stop here
+if [[ ! "${MYOS}" =~ "[Ll]inux" || -z "${BASH}" ]];
+then
+    printf "%s\n" "Either, you are not in BASH, or you are not using Linux. Exiting..."
+    return 1
+fi
 
 local GREP_OPTIONS="-r -E --color=never"
+local GREP_RANGE="--before-context=7 --after-context=7"
 ## local DEBUG="0"      ## Not used in this function
 local DIV=$(printf "%80s\n"|tr ' ' - )
 local THIS_HOST=$(hostname)
@@ -13,12 +30,12 @@ local PREVIOUS_WORKDIR=${OLDPWD}
 
 ## Modify HCSINFO_FIELDS to your liking, in order to get the information
 ## that you may want out of hcs.info
-local HCSINFO_FIELDS="hcsServiceDetail|hcsServiceApp|hcsServiceEnv|hcsServiceIP|hcsServiceTeam"
+local HCSINFO_FIELDS="hcsServiceClass|hcsServiceDetail|hcsServiceApp|hcsServiceEnv|hcsServiceIP|hcsServiceTeam|hcsServiceSupportGroup"
 local PREFIX="hcsservices-hostinfo-"
 unset HOST_ARRAY
 
-
-## If EIR number is not 4 digits long, function 
+## If EIR number is not 4 characters long or is not a valid number,
+## we will try again, over and over until we get a valid 4 digit number
 while [[ -z "${EIR_NUM}" ]]; 
     do
 clear; printf "%s" "Please enter Application EIR Number (i.e. 1111): "
@@ -32,8 +49,6 @@ clear; printf "%s" "Please enter Application EIR Number (i.e. 1111): "
                 unset EIR_NUM
         fi
     done  
-#
-#    local SEC_MENU_ITEM=$(echo "${SEC_MENU_ITEM}" | tr [:upper:] [:lower:] )
 
 cd "${INFODIR}"
 
@@ -44,10 +59,10 @@ cd "${INFODIR}"
 ## which is then stored in one of the files which of course we query here, and
 ## it may give us a false positive
 
+## The last part of this looks weird 'grep -v "${THIS_HOST}"', 
+## but it is necessary, just in case AutoAudit cought your local system, while
+## you are running this function and captured output of 'ps'
 local HOST_ARRAY=( $(find . -name "${PREFIX}*" -exec egrep --regexp="hcsServiceEIR='${EIR_NUM}'" -ls {} \; | sed -e 's/\.\///g' -e 's/[-_]/ /g' | awk '{print $3}' | grep -v "${THIS_HOST}" ))
-
-## This looks weird, but it is necessary, just in case AutoAudit cought your
-## local system, and captured output of 'ps' 
 
 if [[ ${#HOST_ARRAY[@]} -le "1" ]]; 
     then
@@ -67,7 +82,10 @@ for EACH_HOST in "${HOST_ARRAY[@]}"
         printf "%s\n" ${DIV}
         printf "\t%s\n" ">>>> BEGIN hcs.info Details for host: ${EACH_HOST} <<<<"
         printf "%s\n" ${DIV}
-        egrep \""${HCSINFO_FIELDS}"\" "${PREFIX}""${EACH_HOST}"_* | sed -e 's/\#\#.*\#\#//g' -e 's/  *//g'
+        ## DO NOT modify anything here, if you want to change your selection
+        ## instead, play with the 'HCSINFO_FIELDS' and 'GREP_RANGE' at the top
+        egrep ${GREP_RANGE} --regexp=hcsServiceEIR=\'"${EIR_NUM}"\' "${PREFIX}""${EACH_HOST}"_* \
+        | egrep "${HCSINFO_FIELDS}" | sed -e 's/\#\#.*\#\#//g' -e 's/  *//g'       
         printf "%s\n" ${DIV}
         printf "\t%s\n" ">>>> END hcs.info Details for host: ${EACH_HOST} <<<<"
         printf "%s\n" ${DIV}        
