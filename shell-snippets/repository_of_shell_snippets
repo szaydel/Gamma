@@ -492,3 +492,18 @@ for I in $(bzcat -c /var/log/messages-20100709.bz2 | egrep "Buffer I/O error on 
 NONPROD_ASM_ARRAY=( $(cat /tmp/san-clar_wwn-mep006.txt | egrep -E "sd" | sed -e "s/  */ /g" | cut -d " " -f6 | sed -e "s/^/3/g" | sort -u))
 for DISK in ${NONPROD_ASM_ARRAY[@]}; do oracleasm querydisk /dev/mapper/"${DISK}-part1"; done
 
+## Checking if a disk's partition table is not empty
+[[ $(sfdisk -l "/dev/mapper${EACH_LUN}"  | sed -e "s/\  */ /g" -e "s/[\,,\:]//g" | egrep -E "(83 Linux)|Empty") != "" && $(sfdisk -l "/dev/mapper${EACH_LUN}" | egrep -E "^\/dev/" | wc -l) ]]
+
+## Restart SUN SMF when doing svcs -xv shows any failed services
+## Always manually stop the services in question prior to doing this HUP
+kill -HUP /lib/svc/bin/svc.configd
+
+## Test list of servers - ssh access
+for A in $(cat /tmp/ifl-server.list|grep -v '^#'); do netcat -z -vv -w5 $A 22; done
+
+## Pulling serial number out of the bios
+hwinfo --bios|egrep -m 1 "Serial:"|cut -d\" -f 2
+
+## zsh re-write Array list items using for loop
+for A in "${MYARR[@]}"; do echo ${A/.usps.gov/}; done 
