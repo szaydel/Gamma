@@ -1,4 +1,50 @@
 #!/bin/bash
+##: Title       : USPS Local Disk to SAN LUN Replication script for boot devices
+##: Date Rel    : 10/01/2010
+##: Date Upd    : 11/08/2010
+##: Author      : "Sam Zaydel" <sam.zaydel@usps.gov>
+##: Version     : 1.0.2
+##: Release     : Beta
+##: Description : 
+##: Options     : 
+##: Filename    : local-boot-to-san-boot-sync.sh
+###############################################################################
+### NOTES: ####################################################################
+###############################################################################
+## This script is not really designed to be very flexible as far as what is
+## being replicated. The reason for this is that we use a mix of tools here
+## some specific to LVM. This automation, in its current form will look for
+## very specific items, and if they are not present, it will fail right away
+###############################################################################
+### Index/Description of Functions included in Library ########################
+###############################################################################
+##
+###############################################################################
+### Revisions: ################################################################
+###############################################################################
+## 11/08/2010 : Added return code to directory creation function
+##
+##
+##
+###############################################################################
+################# Major objectives and expected behavior ######################
+###############################################################################
+### IMPORTANT:
+### 1. multipath should allow us to flush the LUN to which we are replicating
+### if we cannot flush the LUN, this is likely due to LVM volumes in vg_rootsan
+### being Active
+### 2. we are very cautious, so most errors will result in early termination
+### 3. WWID of Mirror device is derived through LVM, so we have to have another
+### LVM 'VG' with an attached 'PV'
+### 4. in step 1b, we check a bunch of things, and if anything is not as
+### expected we bail
+### 5. We make sure that /boot is not mounted when we 'dd' its contents to a 
+### LUN on SAN
+### 6. After using LVM Snapshot technology to replicate rootdisk components
+### we fsck each device, to make sure that the filesystem is clean when the
+### server boots up in DR
+### 
+###############################################################################
 ###############################################################################
 ### Step 1 - Variables and Preliminary Checks
 ###############################################################################
@@ -9,6 +55,9 @@
 ###############################################################################
 # Define Source Boot Device and LVM Device 
 SRCBOOT=$(egrep "\/boot" /etc/fstab | cut -d " " -f1) # Extracting boot device from 'fstab'
+## This is our source, and it is invariable, but we could choose to 
+## change this script to run it with options where inputs 
+## are source 'VG' and destination 'VG'
 SRCVOLGRP=vg_rootdisk
 MIRVOLGRP=vg_rootsan
 ## Depending upon how a server was built, LVM may be filtering 'by-name' or 'by-id'
@@ -19,8 +68,9 @@ MIRBOOTDISK="/dev/mapper/${MIRBOOTWWN}"
 
 ## MIRBOOTDM="/dev/mapper/${MIRBOOTWWN}-part1"
 MIRBOOTDM="${MIRBOOTDISK}-part1"
-MYLVS=( root var export swap )
-
+## Array containing logical volumes 'lvs' which we need to duplicate
+MYLVS=( root var swap export )
+## Timeout value used throughout the script
 TIMEOUT=5
 ###############################################################################
 ### Step 1b - Verify that critical variables are correctly set
@@ -29,7 +79,7 @@ TIMEOUT=5
     if [[ $(vgscan 2>/dev/null | grep -q "${MIRVOLGRP}"; echo $?) -ne "0" ]]; then
         printf "%s\n" "CRITICAL: Unable to locate Volume Group ${MIRVOLGRP}. Cannot continue."
         exit 1
-    ## We cannot continue if out 'MIRBOOTWWN' variable is not defined
+    ## We cannot continue if our 'MIRBOOTWWN' variable is not defined
     elif [[ -z "${MIRBOOTWWN}" ]]; then
         printf "%s\n" "CRITICAL: Unable to identify Device ID for our SAN Mirror. Cannot continue."
         exit 1
@@ -51,9 +101,55 @@ TIMEOUT=5
 ###############################################################################
 ### Step 2 - Definition of Functions used later in the script
 ###############################################################################
+## Multipath flush function is required to make sure that we will not have a 
+## problem with LVM and device-mapper
+## Several instances have been observed where 'dm' device under /dev/mapper
+## for Part-1 or Part-2 is gone
+## This script relies heavily on /dev/mapper for its block devices and will
+## rapidly fail if there is a an issue with the device-mapper
+flush_mpath ()
+{
+## First, let's make sure that the mirror 'VG' is offline, otherwise multipath
+## will complain and faile to flush the device
+printf "%s\n" "[INFO] Flushing multipath for ${MIRBOOTWWN}"
 
-### Begin Changes made on 05/21/2010
-## Clean-up function for when things do not go right
+local COUNT="3"
+while [[ $(ls "/dev/mapper/${MIRVOLGRP}-lv_*" 2>/dev/null) && "${COUNT}" -gt "0" ]]
+    do
+        vgchange -an "${MIRVOLGRP}"; RET_CODE=$?
+        sleep "${TIMEOUT}"
+        local COUNT=$((COUNT-1))
+    done
+
+    if [[ "${RET_CODE}" -ne "0" ]]; then
+        printf "%s\n" "[WARNING] Unable to offline All Volumes in ${MIRVOLGRP}"
+        RET_CODE="1"
+        return "${RET_CODE}"
+    fi
+
+local COUNT="3"
+while [[ $(multipath -l "${MIRBOOTWWN}" 2>/dev/null) && "${COUNT}" -gt "0" ]]
+    do
+        multipath -f "${MIRBOOTWWN}"
+        sleep "${TIMEOUT}"
+        local COUNT=$((COUNT-1))
+    done
+    
+    if [[ $(multipath -l "${MIRBOOTWWN}" 2>/dev/null) ]]; then
+            printf "%s\n" "[WARNING] Unable to flush multipath for ${MIRBOOTWWN}"
+            RET_CODE="1"
+        else
+            printf "%s\n" "[INFO] Flushed multipath for ${MIRBOOTWWN}"
+            multipath -v2
+            sleep "${TIMEOUT}"
+            RET_CODE="0"
+    fi     
+return "${RET_CODE}"
+}
+
+## Clean-up function used to remove snaps after a copy has been made, or
+## if something has not gone as expected in the process,
+## because we do not want to keep snapshots
 ## Function can accept one argument $1, which should be one of
 ## values from the MYLVS array
 cleanup-snap()
@@ -100,9 +196,38 @@ while [ -h "${SYM_LINK_LVSNAP}" -a "${COUNT}" -gt 0 ]
 return "${RET_CODE}"    
 }
 
-# Grub needs to be modified to boot from /dev/vg_rootsan/lv_root
+make_required_dirs ()
+{
+
+## This function is part legacy, but it is still required
+## to verify/create a necessary structure under /mnt
+## which is where we temporarily mount 'boot' and 'root'
+## to allow for localized adjustments of files, after the
+## sync process is done
+local MIRBOOT_BASE=/mnt/mir3
+[ ! -d "${MIRBOOT_BASE}" ] && /bin/mkdir "${MIRBOOT_BASE}"
+
+for DIR in boot root var
+    do
+        if [[ -d "${MIRBOOT_BASE}/${DIR}" ]]; then
+                printf "%s\n" "[INFO] Directory ${MIRBOOT_BASE}/${DIR} exists."
+            else
+                /bin/mkdir "${MIRBOOT_BASE}/${DIR}"
+                RET_CODE=$?
+            fi
+    done
+return "${RETCODE:-0}"
+}
+
 modify_grub ()
 {
+
+## Grub needs to be modified to boot from /dev/vg_rootsan/lv_root
+## Function assumes that there is already another version of menu.lst
+## available on /boot/grub
+## We basically have stage menu.lst.DR on our /boot, and we are simply
+## flipping real file to .prod and the .DR to menu.lst
+
 local MIRBOOTMP=/mnt/mir3/boot
 local GRUBDIR=/mnt/mir3/boot/grub
 local GRUB_MENU=${GRUBDIR}/menu.lst
@@ -145,6 +270,46 @@ COUNT=3  ## In case /boot is busy, we will try 3 times with a 15 second wait per
         else
             printf "%s\n" "Directory /boot has been unmounted Successfully."; RET_CODE=0
     fi
+
+return "${RET_CODE}"
+}
+
+sync_boot ()
+## Function is used to duplicate /boot, which should be
+## unmounted prior to this function running
+{
+if [[ -b "${SRCBOOT}" && -b "${MIRBOOTDM}" ]]; then
+        local DD_CMD=/bin/dd
+        printf "%s\n" "###############################################################################"
+        printf "%s\n" "[INFO] Performing copy using ${DD_CMD} of /boot..."
+        printf "%s\n" "###############################################################################"
+        unmount_boot || return 1        
+        "${DD_CMD}" if="${SRCBOOT}" of="${MIRBOOTDM}" bs=1M
+        RET_CODE=$?
+    else
+        printf "%s\n" "###############################################################################"
+        printf "%s\n" "[WARNING] It appears that ${MIRBOOTDM} is invalid." 
+        printf "%s\n" "[WARNING] Please check your SAN_BOOT device."
+        printf "%s\n" "###############################################################################"
+        exit 1
+        RET_CODE=1
+fi
+
+if [ "${RET_CODE}" -eq "0" ]; then
+        ## We are labeling our /boot filesystem [partition 1] with "SAN_BOOT"
+        ## just for ease of identification in the future
+        local LABEL_CMD=/sbin/tune2fs
+        "${LABEL_CMD}" -L "SAN_BOOT" "${MIRBOOTDM}" &> /dev/null
+        remount_boot || printf "%s\n" "Failed to re-mount directory /boot, Please check manually."
+        printf "%s\n" "###############################################################################"
+        printf "%s\n" "Duplicated local ${SRCBOOT} to SAN ${MIRBOOTDM} Successfully."
+        printf "%s\n" "###############################################################################"
+     else
+        remount_boot || printf "%s\n" "Failed to re-mount directory /boot, Please check manually."
+        printf "%s\n" "###############################################################################"
+        printf "%s\n" "Duplication from local ${SRCBOOT} to SAN ${MIRBOOTDM} Failed. Exiting..."
+        printf "%s\n" "###############################################################################"
+fi
 
 return "${RET_CODE}"
 }
@@ -200,7 +365,8 @@ local DD_MIRROR="/dev/mapper/${MIRVOLGRP}-lv_${LV_NAME}"
     printf "%s\n" "###############################################################################"
     printf "%s\n" ""
         ## We need to make sure that our source and destination are both block-special devices
-        ## If for some reason this is not the case, we have to stop right away
+        ## If for some reason this is not the case, we have to stop right away, before causing
+        ## any potential harm to the system
         if [[ -b "${DD_MIRROR}" && -b "${DD_SOURCE}" ]]; then
                 /bin/dd if="${DD_SOURCE}" of="${DD_MIRROR}" bs=1M
                 printf "%s\n" "[INFO] Checking Filesystem Consistency on ${DD_MIRROR}."
@@ -244,7 +410,7 @@ read USER_INPUT
 case "${USER_INPUT}" in
 
     [Yy])
-        printf "%s\n" "Continuing..."    
+        printf "%s\n\n" "Continuing..."
         sleep ${TIMEOUT}
         ;;
 
@@ -259,16 +425,15 @@ case "${USER_INPUT}" in
     
 esac
 
+flush_mpath || exit 1
+
 ## Make sure necessary directory structure is in place under /mnt
 
-[ ! -d "/mnt/mir3/${DIR}" ] && mkdir "/mnt/mir3"
+make_required_dirs || exit 1
 
-for DIR in boot root var
-    do
-        [ ! -d "/mnt/mir3/${DIR}" ] && echo mkdir "/mnt/mir3/${DIR}"
-    done
-
+###############################################################################
 ### Step 4 - Check for, and create LVs and filesystems as necessary 
+###############################################################################
 
 ## Check for existance of Mirror PV Device
 printf "%s\n" "...Checking for existance of PV Devices on Mirrored Storage..."
@@ -280,63 +445,37 @@ elif [ -b "${MIRBOOTDISK}-part2" ]; then
     pvdisplay -s "${MIRBOOTDISK}-part2"; RET_CODE=$? # Check for Partition 2 labeled <diskid>-part2 and return status
     [ "${RET_CODE}" -eq 0 ] && printf "%s\n" "PV Device ${MIRBOOTDISK}-part2 was found"
 else
-    printf "%s\n" "CRITICAL: Could not identify PV Device from SAN LUN defined in LVM. Please check manually..."
+    printf "%s\n" "###############################################################################"
+    printf "%s\n" "[CRITICAL] Could not identify PV Device on ${MIRBOOTWWN}"
+    printf "%s\n" "###############################################################################"
     exit 1
 fi
 
     (vgchange -ay ${MIRVOLGRP} \
     && printf "%s\n" "Changed status of ${MIRVOLGRP} to Active...") || exit 1
        
-    for LV_NAME in "${MYLVS[@]: 0:2}" # These two are 4GB LVs and filesystems
+    for LV_NAME in "${MYLVS[@]: 0:3}" # These two are 4GB LVs and filesystems
         do
-            [ ! -h /dev/${MIRVOLGRP}/lv_${LV_NAME} ] && lvcreate --name lv_${LV_NAME} -L4G ${MIRVOLGRP}
-            # mkfs -t ext3 /dev/${MIRVOLGRP}/lv_${LV}
+        [ ! -h "/dev/${MIRVOLGRP}/lv_${LV_NAME}" ] && lvcreate --name "lv_${LV_NAME}" -L4G "${MIRVOLGRP}"
         done
           
     for LV_NAME in "${MYLVS[@]: 2:4}" # These two are 1GB LVs and filesystems
         do
-            [ ! -h /dev/${MIRVOLGRP}/lv_${LV_NAME} ] && lvcreate --name lv_${LV_NAME} -L1G ${MIRVOLGRP}
-            # mkfs -t ext3 /dev/${MIRVOLGRP}/lv_${LV}
+        [ ! -h "/dev/${MIRVOLGRP}/lv_${LV_NAME}" ] && lvcreate --name "lv_${LV_NAME}" -L1G "${MIRVOLGRP}"
         done
 
 ### Step 5 - Replicate data between SAN and Local Disk
 ## Replicate /boot
 
-stat "${MIRBOOTDM}" &> /dev/null; RET_CODE=$?
- 
-    if [ "${RET_CODE}" -ne "0" ]; then # If return code is not 'zero' we need to re-make the filesystem
-        clear
-        printf "%s\n" "[WARNING] It appears that ${MIRBOOTDM} is invalid. Please check your SAN_BOOT device."
-        exit 1
-    else
-        clear
-        printf "%s\n" "Performing copy *** dd *** of /boot..."
-        unmount_boot || exit 1
+sync_boot || exit 1
 
-        if [[ -b "${SRCBOOT}" && -b "${MIRBOOTDM}" ]]; then
-                /bin/dd if="${SRCBOOT}" of="${MIRBOOTDM}" bs=1M
-                RET_CODE=$?
-            else
-                RET_CODE=1
-        fi
-
-        if [ "${RET_CODE}" -eq "0" ]; then
-                 tune2fs -L "SAN_BOOT" ${MIRBOOTDM} &> /dev/null
-                 remount_boot || printf "%s\n" "Failed to re-mount directory /boot, Please check manually."
-                 printf "%s\n" "Duplicated local ${SRCBOOT} to SAN ${MIRBOOTDM} Successfully."
-             else
-                 remount_boot || printf "%s\n" "Failed to re-mount directory /boot, Please check manually."
-                 printf "%s\n" "Duplication from local ${SRCBOOT} to SAN ${MIRBOOTDM} Failed. Exiting..."
-                 exit 1
-         fi
-    fi
 
 ## Replicate Logical Volumes
 
 for LV_NAME in "${MYLVS[@]: 0:3}" 
     do
         sync_lvs "${LV_NAME}"; RET_CODE=$?
-        
+
         if [[ "${RET_CODE}" -ne "0" ]]; then
                 cleanup-snap "${LV_NAME}"
                 exit 1
@@ -357,4 +496,4 @@ for LV_NAME in "${MYLVS[@]}"
     do
         offline_lvs "${LV_NAME}"
     done
-## vgchange -an ${MIRVOLGRP}
+
