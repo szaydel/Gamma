@@ -1,9 +1,9 @@
 #!/bin/bash
 ##: Title       : USPS Local Disk to SAN LUN Replication script for boot devices
 ##: Date Rel    : 10/01/2010
-##: Date Upd    : 11/08/2010
+##: Date Upd    : 12/02/2010
 ##: Author      : "Sam Zaydel" <sam.zaydel@usps.gov>
-##: Version     : 1.0.2
+##: Version     : 1.0.3
 ##: Release     : Beta
 ##: Description : 
 ##: Options     : 
@@ -23,7 +23,9 @@
 ### Revisions: ################################################################
 ###############################################################################
 ## 11/08/2010 : Added return code to directory creation function
-##
+## 12/02/2010 : Added LV-offline, LV-online Function
+## Modified flush_mpath() function commenting out LVM bits
+## Due to change to /boot mount, made adjustments to compensate
 ##
 ##
 ###############################################################################
@@ -54,7 +56,8 @@
 ### Step 1a - Definition of critical Variables
 ###############################################################################
 # Define Source Boot Device and LVM Device 
-SRCBOOT=$(egrep "\/boot" /etc/fstab | cut -d " " -f1) # Extracting boot device from 'fstab'
+# SRCBOOT=$(egrep "\/boot" /etc/fstab | cut -d " " -f1) # Extracting boot device from 'fstab'
+SRCBOOT=/dev/disk/by-label/boot # This should be consistent across ALL servers
 ## This is our source, and it is invariable, but we could choose to 
 ## change this script to run it with options where inputs 
 ## are source 'VG' and destination 'VG'
@@ -101,31 +104,99 @@ TIMEOUT=5
 ###############################################################################
 ### Step 2 - Definition of Functions used later in the script
 ###############################################################################
+
+start_stop_lvs ()
+{
+## Function is used to start and stop Logical Volumes
+## passed to this function as an array
+## Normally, the function should be unsed as follows:
+## start_stop_lvs online "${ARRAYNAME[@]}" to start Volumes
+## start_stop_lvs offline "${ARRAYNAME[@]}" to stop Volumes
+
+local LV_NAME=""
+local ACTION="$1"
+shift 1
+local LV_ARRAY=("$@")
+
+    ## Define Action we are expecting to perform, should be
+    ## online '-ay', or offline '-an'
+    if [[ "${ACTION}" = "offline" ]]; then
+        local ACTION=-an
+        local LV_STATE="Offline"
+    elif [[ "${ACTION}" = "online" ]]; then
+        local ACTION=-ay
+        local LV_STATE="Online"
+    else
+        printf "%s\n" "Unexpected parameter ${ACTION} was passed to this function. Cannot continue."
+        return 1
+    fi
+
+    for LV_NAME in "${LV_ARRAY[@]}"
+        do
+            printf "%s\n" "[INFO] Changing state of ${MIRVOLGRP}/lv_${LV_NAME} to ${LV_STATE}" 
+            lvchange "${ACTION}" "${MIRVOLGRP}/lv_${LV_NAME}" &> /dev/null
+
+            sleep 2
+            ## lvchange "${ACTION}" ${MIRVOLGRP}/lv_${LV_NAME} &> /dev/null
+        done
+## We need to make sure Device-Mapper and UDEV have a chance to settle down
+printf "%s\n"
+printf "%s\n" "###############################################################################"
+printf "%s\n" "[INFO] Waiting for ${TIMEOUT} seconds for Device-Mapper and UDEV to settle."
+printf "%s\n" "###############################################################################"
+printf "%s\n"
+
+sleep "${TIMEOUT}"
+
+    for LV_NAME in "${LV_ARRAY[@]}"
+        do
+        local SYM_LINK_LV_MIR="/dev/${MIRVOLGRP}/lv_${LV_NAME}"
+            ## Test if Symlink exists, assuming State required is Online
+            if [[ "${LV_STATE}" = "Online" && -b "${SYM_LINK_LV_MIR}" ]]; then
+                printf "%s\n" "[INFO] Logical Volume ${MIRVOLGRP}/lv_${LV_NAME} is now Online."
+            elif
+            ## Test if Symlink is gone, assuming State required is Offline
+                [[ "${LV_STATE}" = "Offline" && ! -b "${SYM_LINK_LV_MIR}" ]]; then
+                printf "%s\n" "[INFO] Logical Volume ${MIRVOLGRP}/lv_${LV_NAME} is now Offline."
+            else
+                printf "%s\n" "###############################################################################"
+                printf "%s\n" "[WARNING] Logical Volume ${MIRVOLGRP}/lv_${LV_NAME} is not ${LV_STATE}."
+                printf "%s\n" "###############################################################################"
+                local RET_CODE=1
+            fi
+        done
+return "${RET_CODE:-0}"
+}
+
+flush_mpath ()
+{
 ## Multipath flush function is required to make sure that we will not have a 
 ## problem with LVM and device-mapper
 ## Several instances have been observed where 'dm' device under /dev/mapper
 ## for Part-1 or Part-2 is gone
 ## This script relies heavily on /dev/mapper for its block devices and will
 ## rapidly fail if there is a an issue with the device-mapper
-flush_mpath ()
-{
+
 ## First, let's make sure that the mirror 'VG' is offline, otherwise multipath
 ## will complain and faile to flush the device
+printf "%s\n"
 printf "%s\n" "[INFO] Flushing multipath for ${MIRBOOTWWN}"
 
-local COUNT="3"
-while [[ $(ls "/dev/mapper/${MIRVOLGRP}-lv_*" 2>/dev/null) && "${COUNT}" -gt "0" ]]
-    do
-        vgchange -an "${MIRVOLGRP}"; RET_CODE=$?
-        sleep "${TIMEOUT}"
-        local COUNT=$((COUNT-1))
-    done
+#local COUNT="3"
+#while [[ $(ls "/dev/mapper/${MIRVOLGRP}-lv_*" 2>/dev/null) && "${COUNT}" -gt "0" ]]
+#    do
+#        vgchange -an "${MIRVOLGRP}"; RET_CODE=$?
+#        sleep "${TIMEOUT}"
+#        local COUNT=$((COUNT-1))
+#    done
 
-    if [[ "${RET_CODE}" -ne "0" ]]; then
-        printf "%s\n" "[WARNING] Unable to offline All Volumes in ${MIRVOLGRP}"
-        RET_CODE="1"
-        return "${RET_CODE}"
-    fi
+#    if [[ "${RET_CODE}" -ne "0" ]]; then
+#        printf "%s\n" "###############################################################################"
+#        printf "%s\n" "[WARNING] Unable to offline All Volumes in ${MIRVOLGRP}"
+#        printf "%s\n" "###############################################################################"
+#        RET_CODE="1"
+#        return "${RET_CODE}"
+#    fi
 
 local COUNT="3"
 while [[ $(multipath -l "${MIRBOOTWWN}" 2>/dev/null) && "${COUNT}" -gt "0" ]]
@@ -136,10 +207,15 @@ while [[ $(multipath -l "${MIRBOOTWWN}" 2>/dev/null) && "${COUNT}" -gt "0" ]]
     done
     
     if [[ $(multipath -l "${MIRBOOTWWN}" 2>/dev/null) ]]; then
+            printf "%s\n" "###############################################################################"
             printf "%s\n" "[WARNING] Unable to flush multipath for ${MIRBOOTWWN}"
+            printf "%s\n" "###############################################################################"
             RET_CODE="1"
         else
+            printf "%s\n"
             printf "%s\n" "[INFO] Flushed multipath for ${MIRBOOTWWN}"
+            printf "%s\n"
+            printf "%s\n" "[INFO] Re-scanning multipath Devices."
             multipath -v2
             sleep "${TIMEOUT}"
             RET_CODE="0"
@@ -147,13 +223,14 @@ while [[ $(multipath -l "${MIRBOOTWWN}" 2>/dev/null) && "${COUNT}" -gt "0" ]]
 return "${RET_CODE}"
 }
 
+cleanup-snap()
+{
 ## Clean-up function used to remove snaps after a copy has been made, or
 ## if something has not gone as expected in the process,
 ## because we do not want to keep snapshots
 ## Function can accept one argument $1, which should be one of
 ## values from the MYLVS array
-cleanup-snap()
-{
+
 ## Return Code 4 - Snapshot volume was never created
 ## Return Code 5 - Snapshot and Mirror volumes unmounted and snapshot not removed
 ## Return Code 6 - Snapshot and Mirror volumes unmounted and snapshot removed
@@ -425,8 +502,11 @@ case "${USER_INPUT}" in
     
 esac
 
+start_stop_lvs offline "${MYLVS[@]}" || exit 1
+
 flush_mpath || exit 1
 
+start_stop_lvs online "${MYLVS[@]}" || exit 1
 ## Make sure necessary directory structure is in place under /mnt
 
 make_required_dirs || exit 1
@@ -488,12 +568,9 @@ for LV_NAME in "${MYLVS[@]: 0:3}"
 modify_grub
 
 ### Step 7 - Need to offline LVM SAN Logical Volumes and Volume Group
-## Function offline_lvs is defined above and takes only one argument.
-## Variable DIR is iterated based on the list of LVs which we defined in
-## the MYLVS Array at the top of the script. 
+## Function start_stop_lvs is defined above and takes two arguments.
+## First argument is action 'online', or 'offline' 
+## Second argument is the Array of LVs
 
-for LV_NAME in "${MYLVS[@]}"
-    do
-        offline_lvs "${LV_NAME}"
-    done
+start_stop_lvs offline "${MYLVS[@]}" || exit 1
 
