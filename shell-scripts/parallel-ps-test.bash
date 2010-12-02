@@ -21,8 +21,8 @@ CONTROL_FILE="${WORK_DIR}/ps_test_start.flag"
                 while [[ "${COUNT}" -gt 0 ]]
                     do
                         ## (1) Create Log files to capture 'ps' and error output
-                        OUTPUT_LOG="${WORK_DIR}/${CMD_S}-${COUNT}.log"
-                        ERR_LOG="${WORK_DIR}/${CMD_S}-${COUNT}-err.log"
+                        OUTPUT_LOG="${WORK_DIR}/${CMD_S}-test-${COUNT}.log"
+                        ERR_LOG="${WORK_DIR}/${CMD_S}-test-${COUNT}-err.log"
                         
                         ## (2) Actually execute process in a loop structure
                         [[ "${DEBUG}" -ge "1" ]] && echo "Counter is currently: ${COUNT}"
