@@ -1,0 +1,953 @@
+#!/bin/echo "WARNING: Do not try to execute this file. Only source it."
+## Normally this file is not executable, but if someone changes permissions
+## the file will execute with /bin/echo and the warning message above.
+
+#: Title       : USPS Functions Library File
+#: Date Orig   : 07/01/2010
+#: Date Upd    : 12/21/2010
+#: Author      : "Sam Zaydel" <sam.zaydel@usps.gov>
+#: Version     : 1.01.5
+#: Description : See detailed notes section below
+#: Options     : None
+#: Filename    : servercopyof.bash_functions
+
+###############################################################################
+### NOTES: ####################################################################
+###############################################################################
+## Current copy of the file should reside in /sa/teams/dr/bin
+## Please, become "root" and source the library as root, to make sure that
+## all functions work correctly. Some functions will work as a non-root user,
+## but any function requiring root access will prompt you to become root.
+##
+###############################################################################
+### Index/Description of Functions included in Library
+###############################################################################
+##
+###############################################################################
+### Function Name : "dr-grub-mod" #############################################
+###############################################################################
+### Description: ############################################################## 
+## Modifies grub, only on systems that currently boot locally and need to boot
+## from SAN while in "dr"
+## New file is created from /boot/grub/menu.lst named menu.lst.DR
+
+###############################################################################
+### Function Name : "dr-fstab-mod" ############################################
+###############################################################################
+### Description: ############################################################## 
+## Print to screen a modified version of system's fstab entries
+## where every NFS filesystem export is pre-fixed with "/dr" 
+## Contents with changes are written to screen, and a /etc/fstab.DR 
+## file is written to system.
+
+###############################################################################
+### Function Name : "dr-ldap-mod" #############################################
+###############################################################################
+### Description: ##############################################################
+## Contents of /etc/ldap.conf and /etc/openldap/ldap.conf are modified for  
+## DR. The changes are required to allow systems to properly come up in DR.
+## Contents are written to files with the .DR extension.
+
+###############################################################################
+### Function Name : "get-nfs-info" ############################################
+###############################################################################
+### Description: ##############################################################
+## Function uses information in /sa/info/services/incoming and based on 
+## contents of a file that you need to supply as an argument to the function
+## NFS mount info will be returned in a structured format useful for 
+## creating a storage request for a DR test to the Storage Team.
+
+###############################################################################
+### Function Name : "dr-check-config" #########################################
+###############################################################################
+### Description: ##############################################################
+## Contents of multiple files requiring modification for DR are checked for
+## first existence, to make sure .DR versions have been created, and that
+## the files are current, and dated later than the Production version of   
+## the same files. Warnings are produced when any discrepancies are found.
+
+###############################################################################
+### Function Name : "asm-disk-chk" ############################################
+###############################################################################
+### Description: ##############################################################
+## Function uses various system tools, including LVM, SYSFS, fdisk, and more
+## to gather information about a disk given to it. Prompt will request that 
+## ID of disk is supplied in a specific format. Function will show paths to
+## disk, its partition table, and whether or not it is part of ASM, according
+## to the Metadata written to the disk.
+
+###############################################################################
+### Function Name : "check-blkdev-state" ######################################
+###############################################################################
+### Description: ##############################################################
+## Function reads contents of /sys/block/DEVICE_NAME/device/state file for each
+## "sdXXX" block device present on the system, according to list of /sys/block
+## and will return an error for any device that does not report as running.
+## Normally, any running block device will have word "running" in the state
+## file: /sys/block/DEVICE_NAME/device/state.
+
+###############################################################################
+### Function Name : "get-server-by-eir" #######################################
+###############################################################################
+### Description: ##############################################################
+## Function searches through contents of AutoAudit directory to locate info on
+## the EIR number which we supply to it. Run this function without any arguments
+## the only variable that we really need is the EIR number which the function
+## prompts you for. EIR number is expected to be a 4 digit number.
+## It is also possible to limit by environment, but is optional.
+## Enhanced function by adding an option to stop after list of hostnames
+## is created, to speed-up workflow and reduce impact on NFS
+
+###############################################################################
+### END NOTES: ################################################################
+###############################################################################
+
+## Variables used globally in this library file
+DIV=$(printf "%80s\n"|tr ' ' - )
+
+dr-setup-environment ()
+
+{
+printf "%s\n" "Please, select which DR environment we are configuring (default is DR.Test):"
+printf "%s\n" "DR.Test" "DR.Prod"
+printf "%s\n" "" ""
+printf "%s" "Please enter one of the above Environments: "
+read USER_INPUT_DR_ENV
+
+    case "${USER_INPUT_DR_ENV}" in
+    
+            [Dd][Rr].[Tt]est) printf "%s\n" "You selected DR-TEST [Test DR Model]"
+            DR_ENV="DR.test"
+            LOWCASE_DR_ENV=$(echo "${DR_ENV}" | tr [:upper:] [:lower:])
+            ;;
+            
+            [Dd][Rr].[Pp]rod) printf "%s\n" "You selected DR [True DR Model]"
+            DR_ENV="DR"
+            LOWCASE_DR_ENV=$(echo "${DR_ENV}" | tr [:upper:] [:lower:])
+            ;;
+            
+            *) printf "%s\n" "Choice not understood, assuming DR-TEST [Test DR Model]"
+            DR_ENV="DR.test"
+            LOWCASE_DR_ENV=$(echo "${DR_ENV}" | tr [:upper:] [:lower:])
+            ;;
+    
+    esac
+export DR_ENV
+}
+
+# dr-fstab-mod ()
+#{
+#local FS_CONF=/etc/fstab 
+#    if [ $UID -ne 0 ]; then 
+#       printf "%s\n" "You are not currently root. Run this function as root." 
+#       return 1
+#       else
+#           sed -e "s/\:\//\:\/dr\//g" ${FS_CONF} > ${FS_CONF}.DR
+#           ls -l ${FS_CONF} ${FS_CONF}.DR
+#          printf "\n\n"
+#           printf "%s\n" ${DIV}
+#           printf "%s\n" "Modified the following entries from ${FS_CONF}:"
+#           printf "%s\n" ${DIV}
+#           egrep -e "\/dr\/" /etc/fstab.DR 
+#    fi
+#}
+
+dr-fstab-mod ()
+
+{
+    if [ $UID -ne 0 ]; then
+       printf "%s\n" "You are not currently root. Run this function as root."
+       return 1
+    fi
+
+    if [ -z "${DR_ENV}" ]; then
+       printf "%s\n" "DR_ENV variable is not set. Please, execute dr-setup-environment function."
+       return 1
+    fi
+
+    local SYS_TYPE=$(/usr/sbin/dmidecode --string system-product-name)
+    local VM="VMware Virtual Platform"
+    local PHYS="ProLiant [A-Z]{1}.* G[0-9]"
+    local FS_CONF=/etc/fstab
+    local ROOT_SAN=""
+    
+    ## Determine if server has a vg_rootsan Volume Group, which means
+    ## server is booting locally, and will need to have fstab modified
+    ## with a vg_rootsan diskgroup, instead of vg_rootdisk
+    if [[ -f /etc/lvm/backup/vg_rootsan ]]; then
+    
+            local ROOT_SAN="Y"
+            ## printf "%s\n" "Flag for Local boot set to: ${ROOT_SAN}"
+        else
+            local ROOT_SAN="N"
+    fi
+      
+    ## If system is a VM, we do not need to change to 'vg_rootsan'
+    if [[ "${SYS_TYPE}" = "${VM}" ]]; then
+            sed -e "s/\:\//\:\/dr\//g" \
+            -re "s/nfs *rw\,/nfs rw\,noauto\,/g" \
+            "${FS_CONF}" > "${FS_CONF}.${DR_ENV}"
+    ## If system is Physical, we have two scenarios, one where server is
+    ## booting to SAN already, and one where it is booting to local disk
+    ## and we have to create a new diskgroup vg_rootsan, to which we copy
+    ## local os, and have to make sure that we update DR version of /etc/fstab
+    ## to reflect the different diskgroup name in the mountpoint
+    elif [[ "${SYS_TYPE}" =~ "${PHYS}" ]]; then
+    
+        case "${ROOT_SAN}" in
+        
+            Y)  ## If ROOT_SAN flag is set to YES, we change vg_rootdisk to vg_rootsan
+                sed -e "s/\:\//\:\/dr\//g" \
+                -e "s/rootdisk/rootsan/g" \
+                -re "s/nfs *rw\,/nfs rw\,noauto\,/g" \
+                "${FS_CONF}" > "${FS_CONF}.${DR_ENV}"
+                # sed -e "s/\:\//\:\/dr\//g"  -e "s/rootdisk/rootsan/g" ${FS_CONF} > "${FS_CONF}.${DR_ENV}"
+            ;;
+            
+            N) ## If ROOT_SAN flag is set to NO, we leave vg_rootdisk unchanged
+                sed -e "s/\:\//\:\/dr\//g" -re "s/nfs *rw\,/nfs rw\,noauto\,/g" \
+                "${FS_CONF}" > "${FS_CONF}.${DR_ENV}"           
+            ;;
+            
+            *) ## We should only have a 'Y' or 'N'
+                printf "%s\n" "Unable to determine whether or not system has vg_rootsan. Cannot continue."
+            ;;
+            
+        esac
+            
+    else
+            printf "%s\n" "System is unknown. Cannot continue."
+            return 1
+#        else
+#            sed -e "s/\:\//\:\/dr\//g" \
+#            -e "s/rootdisk/rootsan/g" \
+#            -re "s/nfs *rw\,/nfs rw\,noauto\,/g" \
+#            "${FS_CONF}" > "${FS_CONF}.${DR_ENV}"
+           # sed -e "s/\:\//\:\/dr\//g"  -e "s/rootdisk/rootsan/g" ${FS_CONF} > "${FS_CONF}.${DR_ENV}"            
+    fi
+    
+           ls -l "${FS_CONF}" "${FS_CONF}.${DR_ENV}"
+           printf "\n\n"
+           printf "%s\n" ${DIV}
+           printf "%s\n" "Modified the following entries from ${FS_CONF}:"
+           printf "%s\n" ${DIV}
+           # egrep -e "\/dr\/" "${FS_CONF}.${DR_ENV}"
+           diff "${FS_CONF}" "${FS_CONF}.${DR_ENV}"
+           printf "%s\n" ${DIV}
+}
+
+dr-ldap-mod ()
+{
+    if [ $UID -ne 0 ]; then
+       printf "%s\n" "You are not currently root. Run this function as root."
+       return 1
+    fi
+    
+    if [ -z "${DR_ENV}" ]; then
+       printf "%s\n" "DR_ENV variable is not set. Please, execute dr-setup-environment function."
+       return 1
+    fi
+
+    local GREP_OPTIONS="-r -E --color=never"
+    local LD_CONF=/etc/ldap.conf
+    local OP_LD_CONF=/etc/openldap/ldap.conf
+    local KRB_CONF=/etc/krb5.conf
+    local DNS_CONF=/etc/resolv.conf
+
+    
+           sed -e s/"^host\b.*$"/"host    eagnmnsu227.usps.gov eagnmnsu224.usps.gov"/g ${LD_CONF} > "${LD_CONF}.${DR_ENV}"
+           sed -e s/"^base\b.*$"/"base\tou=linux,ou=dr,ou=eagan,ou=automount,dc=usps,dc=gov"/g -e s/"^host\b.*$"/"host    eagnmnsu227.usps.gov eagnmnsu224.usps.gov"/g ${OP_LD_CONF} > "${OP_LD_CONF}.${DR_ENV}"
+           egrep -v "eagnmnsu17a|eagnmnsu045|eagnmnsu4ea|samtcasu" ${KRB_CONF} > "${KRB_CONF}.${DR_ENV}"
+           egrep "56.192.106.18|usps" ${DNS_CONF} > "${DNS_CONF}.${DR_ENV}"
+}
+
+get-nfs-info ()
+{
+if [[ "$#" -lt 1 ]]; then
+    printf "%s\n" "--------------------------------------------------------------------------------"
+    printf "%65s\n" "******  [Critical] Missing Input File: [Critical] ******" "Please, supply input file with list of servers, one per line."
+    printf "%s\n" "--------------------------------------------------------------------------------" 
+    return 1
+    
+elif [[ "$#" -gt 1 ]]; then
+    printf "%s\n" "--------------------------------------------------------------------------------"
+    printf "%65s\n" "******  [Critical] Multiple Input Files: [Critical] ******" "Only one input file should be used."
+    printf "%s\n" "--------------------------------------------------------------------------------" 
+    return 1
+fi
+
+local GREP_OPTIONS="-r -E --color=never"
+local DEBUG="0"
+local DIV=$(printf "%80s\n"|tr ' ' - )
+local HOST_INFO_INPUT=$@
+local NFS_INFO_TMP=/tmp/dr-info-nfs.$$
+local INFODIR=/sa/info
+local SERV=${INFODIR}/services
+local INCOMING=${SERV}/incoming
+local EIR_TABLE=${SERV}/etc/eir.tab
+local FILENAME=""
+local APP_EIR=""
+local APP_NAME=""
+
+clear
+printf "%s" "Please enter Application EIR Number, optional (i.e. 1111): "
+
+## Entry of application name is optional and will only be used in
+## the grep command below if it exists
+read APP_EIR
+
+    while read SERVER_NAME 
+       do 
+
+        local FILENAME=$(ls ${INCOMING}/hcsservices-hostinfo-${SERVER_NAME}_cf*)
+        local SERVER_IP_ADDR=$(host ${SERVER_NAME} | cut -d " " -f4)
+        ## We test here that our EIR is a number and 4 digits long
+        ## if it is a 4 digit number, we establish 'APP_NAME'
+        if [[ "${APP_EIR}" =~ [[:digit:]]{4} && "${#APP_EIR}" -eq 4 ]]; then 
+            local APP_NAME=$(grep --regexp=^"${APP_EIR}" "${EIR_TABLE}" | cut -d":" -f3 | tr "[[:upper:]]" "[[:lower:]]")
+         fi
+        printf "%s\nReading NFS information from file:\n# ${FILENAME}\n"
+        printf "%s\n" ${DIV}
+         
+         ## Below we create a file with two fields, using a ':' as a separator 
+         ## first being NFS IP and second share name
+         ## Example: 56.207.46.242:/tacs/ptacs/b00
+         cat "${FILENAME}" | egrep '##fstab##' | egrep "([0-9]{1,3}\.){3}[0-9]{1,3}\:" | egrep -i "${APP_NAME}" | sed -e "s/^/${SERVER_IP_ADDR}:/g" -e "s/\#.fstab\#.//g" | cut -d " " -f1 | tee -a "${NFS_INFO_TMP}"
+         printf "%s\n" ${DIV}
+
+       done < "${HOST_INFO_INPUT}"
+            
+## The following will create a list of colon-separated IPs of all servers that
+## were included in the /tmp/myhosts file
+## Consider only doing one application at a time to make sure NFS information
+## does not get munged, since all servers are grouped into one list 
+
+printf "%s\n" ${DIV}
+printf "%s\n" "###### NFS Share Information for DR-Storage-Request-Start ######"
+printf "%s\n" ${DIV}
+
+## Sort lines written to temp '/tmp/dr-info-nfs.$$' and extract only unique lines
+## Normally, if we do not sort lines, there will be several duplicates
+## as such, we parse our input file through 'sort --unique'
+## We have to make sure that we do this prior to selecting individual fields,
+## because we may have one NFS IP, but several exported paths, which
+## would cause our two arrays to have different number of elements in them
+
+
+## This array contains export path on EMC side, field #3 from NFS_INFO_TMP
+## local EXP_PATH_ARRAY=( $(sort --unique ${NFS_INFO_TMP} | cut -d ":" -f2) )
+## Added on 10/29/2010 - Adjusting array for change in input file format
+local EXP_PATH_ARRAY=( $(cut -d ":" -f3 ${NFS_INFO_TMP} | sort -u))
+
+for EACH_PATH in ${EXP_PATH_ARRAY[@]}
+    do 
+        ## Here, we create an array for the list of IPs to which a share is exported
+        ## and because each export will have only one IP, we probably do not even
+        ## need to make an array out this variable
+        IPS=( $(egrep "${EACH_PATH}" "${NFS_INFO_TMP}" | cut -d ":" -f1));
+        NFS_IP=( $(egrep "${EACH_PATH}" "${NFS_INFO_TMP}" | cut -d ":" -f2 | sort -u));
+        printf "%-22s %-32s %-18s\n" "${EACH_PATH}" "${NFS_IP}" "$(echo ${IPS[*]}|tr " " ":")"
+    done
+
+printf "%s\n" ${DIV}
+printf "%s\n" "###### NFS Share Information for DR-Storage-Request-End ######"
+printf "%s\n" ${DIV}
+rm -f "${NFS_INFO_TMP}"
+}
+
+dr-check-config ()
+## Function will check for existence of files necessary for server to
+##  start-up correctly in the DR environment
+## Update the array with list of files, as the files
+## required are added or removed
+{
+local GREP_OPTIONS="-r -E --color=never"
+
+if [ $UID -ne "0" ]; then
+   printf "%s\n" "You are not currently root. Run this function as root."
+   return 1
+fi
+
+       local SYS_TYPE=$(/usr/sbin/dmidecode --string system-product-name)
+       local VM="VMware Virtual Platform"
+
+       declare -a MY_CONFIG_FILES
+        
+       if [ "${SYS_TYPE}" = "${VM}" ]; then
+          MY_CONFIG_FILES=( "/etc/fstab"
+                    "/etc/ldap.conf"
+                    "/etc/openldap/ldap.conf"
+                    "/etc/krb5.conf"
+                    "/etc/resolv.conf"
+                    )
+          else
+          MY_CONFIG_FILES=( "/etc/fstab"
+                    "/etc/ldap.conf"
+                    "/etc/openldap/ldap.conf"
+                    "/etc/krb5.conf"
+                    "/etc/multipath.conf"
+                    "/etc/resolv.conf"
+                    "/etc/udev/rules.d/30-net_persistent_names.rules"
+                    "/etc/sysconfig/network/ifcfg-bond0"
+                    "/etc/sysconfig/network/ifcfg-bond10"
+                    )
+       fi
+                clear
+
+       
+        if [ -z "${DR_ENV}" ]; then
+
+            printf "%s\n" "Please, select which DR environment config we are verifying (default is DR.Test):"
+            printf "%s\n" "DR.Test" "DR.Prod"
+            printf "%s\n" "" ""
+            printf "%s" "Please enter one of the above Environments: "
+                                       
+            read USER_INPUT_DR_ENV
+
+            case "${USER_INPUT_DR_ENV}" in
+            
+                    [Dd][Rr].[Tt]est) printf "%s\n" "You selected DR-TEST [Test DR Model]"
+                    local DR_ENV="DR.test"
+                    local LOWCASE_DR_ENV=$(echo "${DR_ENV}" | tr [:upper:] [:lower:])
+                    ;;
+                    
+                    [Dd][Rr].[Pp]rod) printf "%s\n" "You selected DR [True DR Model]"
+                    local DR_ENV="DR"
+                    local LOWCASE_DR_ENV=$(echo "${DR_ENV}" | tr [:upper:] [:lower:])
+                    ;;
+                    
+                    *) printf "%s\n" "Choice not understood, assuming DR-TEST [Test DR Model]"
+                    local DR_ENV="DR.test"
+                    local LOWCASE_DR_ENV=$(echo "${DR_ENV}" | tr [:upper:] [:lower:])
+                    ;;
+            
+            esac
+       fi
+        for FILE in ${MY_CONFIG_FILES[@]}
+           do
+               ## Here, we will loop through contents of MY_CONFIG_FILES and check for
+               ## whether or not the files have correct .DR counterparts.
+               ## Time of last change as seconds since Epoch for original and "DR" files
+               ORIG_FILE=$(stat --format="%Z" "${FILE}")
+               DR_FILE=$(stat --format="%Z" "${FILE}.${DR_ENV}" 2> /dev/null)
+                
+                header_lines()
+                {                
+                 printf "%s\n"
+                 printf "%s\n" ${DIV}
+                 printf "%s %40s\n" "### Verifying File ###" "${FILE}"
+                 printf "%s\n" ${DIV}
+                 }
+                                
+             if [[ -f "${FILE}.${DR_ENV}" && -f "${FILE}.${LOWCASE_DR_ENV}" ]]; then 
+
+             ## Condition 1 - both .dr and .DR files exist - Normally, only .DR version should exist.
+                header_lines
+                 printf "%s\n" "WARN: File ${FILE}.${DR_ENV} and ${FILE}.${LOWCASE_DR_ENV} exist. Please check further."
+                 printf  "%s\n" "File ${FILE}.${LOWCASE_DR_ENV} was modified on $(stat --format="%y" ${FILE}.${LOWCASE_DR_ENV} | cut -d " " -f1)"
+                 printf  "%s\n" "File ${FILE}.${DR_ENV} was modified on $(stat --format="%y" ${FILE}.${DR_ENV} | cut -d " " -f1)"
+
+             ## Condition 2 - .dr file exists       
+             elif [ -f "${FILE}.${LOWCASE_DR_ENV}" ]; then
+                header_lines
+                 printf "%s\n" "WARN: File ${FILE}.${LOWCASE_DR_ENV} exists. Please fix name from suffix [.${LOWCASE_DR_ENV}] to suffix [.${DR_ENV}]"
+             
+             ## Condition 3 - .DR file exists       
+             elif [ -f "${FILE}.${DR_ENV}" ]; then 
+                header_lines
+                 printf "%s\n" "GOOD: File ${FILE}.${DR_ENV} exists and was modified on $(stat ${FILE}.${DR_ENV} | grep -i mod | cut -d " " -f2)"  
+             else
+                header_lines
+                 printf  "%s\n" "BAD: File ${FILE}.${DR_ENV} does not exist and should be created."
+             fi
+             
+               ## If Production version of the file is older than "DR" version of the file, 
+               ## we can assume that our "DR" version of the file is current and needs no update.
+               if [[ -f "${FILE}.${DR_ENV}" && "${ORIG_FILE}" -lt "${DR_FILE}" ]]; then        
+                   printf "%s\n" "GOOD: File ${FILE}.${DR_ENV} is newer than ${FILE} which is expected."
+               
+               elif [[ -f "${FILE}.${DR_ENV}" && "${ORIG_FILE}" -gt "${DR_FILE}" ]]; then
+                   printf "%s\n\n" "WARN: File ${FILE}.${DR_ENV} is OLDER than ${FILE}. Please check further."
+                   printf "%s\n" "File ${FILE}.${DR_ENV} last modified: $(stat --format="%y" ${FILE}.${DR_ENV} | cut -d " " -f1)"
+                   printf "%s\n" "File ${FILE} last modified: $(stat --format="%y" ${FILE} | cut -d " " -f1)"
+
+               elif [[ ! -f "${FILE}.${DR_ENV}" ]]; then
+                   printf "%s\n" "BAD: File ${FILE}.${DR_ENV} does not exist. [UNEXPECTED]"
+               fi
+           done
+}
+
+dr-grub-mod ()
+
+{
+    if [ $UID -ne 0 ]; then
+       printf "%s\n" "You are not currently root. Run this function as root."
+       return 1
+    fi
+
+## For the moment this section is not required, because only one type of GRUB
+## configuration exists, other than PROD
+#    if [ -z "${DR_ENV}" ]; then
+#       printf "%s\n" "DR_ENV variable is not set. Please, execute dr-setup-environment function."
+#       return 1
+#    fi
+
+    local SYS_TYPE=$(/usr/sbin/dmidecode --string system-product-name)
+    local VM="VMware Virtual Platform"
+    local PHYS="ProLiant [A-Z]{1}.* G[0-9]"
+    local GREP_OPTIONS="-r -E --color=never"
+    local GRUB_CONF_DIR="/boot/grub"
+#    local GRUB_CONF_DIR="/tmp"
+    local GRUB_CONF_FILE="${GRUB_CONF_DIR}/menu.lst"
+    local ROOT_SAN=""
+    
+    ## Determine if server has /boot on local disk, which means
+    ## server is booting locally, and will need to have fstab modified
+    ## with a vg_rootsan diskgroup, instead of vg_rootdisk
+    if [[ $(egrep --regexp="\/d.*/c0.*p1" /etc/fstab 2>/dev/null) ]]; then
+            
+            ## Server is not booting to SAN Natively
+            local ROOT_SAN="Y"
+        else
+            ## Servcer is booting to SAN Natively, or local /boot is not on /dev/cciss/c0d0p1
+            local ROOT_SAN="N"
+    fi
+    
+    ## If system is a VM, we do not need to change to 'vg_rootsan'
+    if [[ "${SYS_TYPE}" = "${VM}" ]]; then
+    
+        printf "%s\n" "This is a Virtual Machine. ### DO NOT MODIFY GRUB for DR on ANY VM! ###"
+        RET_CODE=1
+    ## If system is Physical, we have two scenarios, one where server is
+    ## booting to SAN already, and one where it is booting to local disk
+    ## and we have to create a new diskgroup vg_rootsan, to which we copy
+    ## local os, and have to make sure that we update DR version of /etc/fstab
+    ## to reflect the different diskgroup name in the mountpoint
+    elif [[ "${SYS_TYPE}" =~ "${PHYS}" ]]; then
+    
+        case "${ROOT_SAN}" in
+        
+            Y)  ## If ROOT_SAN flag is set to YES, we change vg_rootdisk to vg_rootsan
+            
+                if [ ! -f "${GRUB_CONF_FILE}" ]; then
+                        printf "%s\n" "Looks like ${GRUB_CONF_FILE} is missing or not a regular file. Cannot continue."
+                        return 1
+                    else 
+                        sed -e "s/rootdisk/rootsan/g" "${GRUB_CONF_FILE}" > "${GRUB_CONF_FILE}.DR"
+                        printf "%s\n" "Modified ${GRUB_CONF_FILE} and wrote changes to ${GRUB_CONF_FILE}.DR."
+                        RET_CODE=0
+                fi
+            ;;
+            
+            N) ## If ROOT_SAN flag is set to NO, server should be booting to SAN aleady, and no changes required
+                printf "%s\n" "Server ${HOSTNAME} does not appear to have VG vg_rootsan. Cannot continue."
+                RET_CODE=1   
+            ;;
+            
+            *) ## We should only have a 'Y' or 'N'
+                printf "%s\n" "Unable to determine whether or not system has vg_rootsan. Cannot continue."
+                RET_CODE=1
+            ;;
+            
+        esac
+            
+    else
+            printf "%s\n" "System is unknown. Cannot continue."
+            
+            RET_CODE=1           
+    fi
+return "${RET_CODE:-1}" 
+
+}
+
+asm-disk-chk ()
+{
+## Function is used to check a disk using its device ID against 
+## a number of subsystems on the server to determine logical device paths
+## label on the disk/partition, if any, and ASM storage management 
+## to determine whether this disk is configured under ASM
+
+if [ $UID -ne "0" ]; then
+   printf "%s\n" "You are not currently root. Run this function as root."
+   return 1
+fi
+
+# local DIV=$(printf "%80s\n"|tr ' ' - )
+local GREP_OPTIONS="-r -E --color=never"
+local TMP_FILE=/tmp/LUN-detail-${HOST}.info
+local LSSCSI_OUTPUT=/tmp/lsscsi-${HOST}.info
+local HWINFO_OUTPUT=/tmp/hwinfo-${HOST}.info
+local BYID_PATH=/dev/disk/by-id
+local BYNM_PATH=/dev/disk/by-name
+local DM_PATH=/dev/mapper
+local SYS_BUS_DEV=/sys/class/scsi_disk
+
+[ -f "${TMP_FILE}" ] && rm -f "${TMP_FILE}"
+
+> ${TMP_FILE}
+
+insert_break ()
+{
+printf "%s\n" ${DIV} >> "${TMP_FILE}"
+}
+
+while [ -z "${MYDISK}" ];
+    do 
+    clear
+    printf "%s\n" "###############################################################################"
+    printf "%s\n" "######################## Please, enter LUN Device ID ##########################"
+    printf "%s\n" "###############################################################################"
+    printf "%s\n\n" "Hint: 'multipath -l' or 'dmsetup ls' will return all LUNs visible to the system."
+    printf "%s" "LUN ID (33-char): "   
+    read ID
+        
+        if [[ $(echo "${ID}" | egrep -e ^3600) && $(echo "${ID}" | wc -m) -eq "34" ]];
+            then
+                printf "%s\n" "Length of device ID acceptable, and disk name begins with 3600 as expected...continuing..."
+                local MYDISK=${ID}
+                
+                ## We first generate a hwinfo output file, which we will query for additional disk information
+                ## We also generate a lssci output file, which we will also query for block device information and SysFS path information
+                printf "%s\n\n\n"
+                printf "%-25s %s\n" "### PLEASE WAIT ###" "Generating list of devices visible to $(hostname)..."
+                hwinfo --block --disk --partition --scsi > "${HWINFO_OUTPUT}"
+                lsscsi -vk | awk '{ if ( ( NR % 2 ) == 0 ) { printf("%s\n",$0) } else { printf("%s ",$0) } }' | sed -e "s/  */ /g" > "${LSSCSI_OUTPUT}"
+                
+                ## We need to store part of the Disk Label in a Variable, and will use blkid to check for it                
+                local DISK_LABEL=$(echo ${MYDISK} | awk '{ VAR1=substr($0,17,40); printf ("%s\n"), VAR1 }')
+                
+                ## We use output from the hwinfo command, which we store in file /tmp/hwinfo-hostname.txt
+                ## We should have four block devices in this array: /dev/sdXX /dev/sdYY /dev/sdZZ
+                local BLOCK_DEVICE_ID_ARRAY=( $(egrep "${MYDISK}\," "${HWINFO_OUTPUT}" | sed -e "s/  */ /g" -e "s/\,//g" | awk '{printf("%s\n"), $3 }') )
+                # printf "%s\n" "${BLOCK_DEVICE_ID_ARRAY[@]}" ## Uncomment if troubleshooting
+                
+                ## Below we create an array using multipath, which should contain all four paths to LUN
+                ## information is in H:C:T:L format = 2:0:3:76 2:0:2:76 0:0:5:76 0:0:4:76
+                local MULTIPATH_ARRAY=( $(multipath -l ${MYDISK} | awk '/sd[a-z]/ {print $2}') )
+                # printf "%s\n" "${MULTIPATH_ARRAY[@]}" ## Uncomment if troubleshooting
+                clear
+                insert_break               
+                printf "%s\n" "Device has the following \"Friendly-name\" Paths:" >> "${TMP_FILE}" 
+                insert_break
+                
+                [ -b "${DM_PATH}/${MYDISK}" ] && printf "%s\n" "${DM_PATH}/${MYDISK}" >> "${TMP_FILE}"
+                [ -h "${BYID_PATH}/scsi-${MYDISK}" ] && printf "%s\n" "${BYID_PATH}/scsi-${MYDISK}" >> "${TMP_FILE}"   
+                [ -h "${BYNM_PATH}/${MYDISK}" ] && printf "%s\n" "${BYNM_PATH}/${MYDISK}" >> "${TMP_FILE}"
+                insert_break
+                 
+                ## We use blkid to look for the part of the disk label, which we stored in the DISK_LABEL variable
+                insert_break
+                printf "%s\n" "Disk with partial label ${DISK_LABEL} Information:" >> "${TMP_FILE}" 
+                insert_break
+                
+                ## sfdisk output gives information about the partition table on the given disk
+                sfdisk -d "${DM_PATH}/${MYDISK}" 2> /dev/null | egrep --regex "^\/dev" >> "${TMP_FILE}"
+                printf "%s\n\n" >> "${TMP_FILE}"
+                ## blkid output will return a label, if one exists on the given disk 
+                blkid | egrep --ignore-case --regex "${DISK_LABEL}" >> "${TMP_FILE}"; RET_CODE=$?
+                insert_break
+                
+                insert_break
+                printf "%s\n" "Block device paths and /sys/class links according to SysFS:" >> "${TMP_FILE}"                
+                insert_break
+                
+                ## Multipath information may not always be available, if the disk is not configured  
+                ## or has been removed from the multipath configuration with multipath -f
+                
+                for LINE in "${MULTIPATH_ARRAY[@]}"; do 
+                    ls -ld "${SYS_BUS_DEV}/${LINE}/device" >> "${TMP_FILE}"
+                done
+                
+                for DEVICE in "${BLOCK_DEVICE_ID_ARRAY[@]}"; do 
+                    egrep -E "${DEVICE}" "${LSSCSI_OUTPUT}" | awk '{print $6, $8, $9 }' >> "${TMP_FILE}"
+                done                
+                
+                insert_break
+                
+                if [ "${RET_CODE}" = "0" ]; then
+                        insert_break
+                        printf "%s\n" "According to Oracle ASM:" >> "${TMP_FILE}"
+                        insert_break
+                        oracleasm querydisk "${DM_PATH}/${MYDISK}-part1" >> "${TMP_FILE}"                       
+                        insert_break
+
+                    else
+                        insert_break
+                        printf "%sDisk ${MYDISK} appears to be un-labeled.\nExpecting ASM Disk Label...\n\n" >> "${TMP_FILE}"
+                        printf "%s\n" "According to Oracle ASM:" >> "${TMP_FILE}"
+                        [[ $(oracleasm querydisk "${DM_PATH}/${MYDISK}-part1" &> /dev/null) ]] || (printf "%s\n" "Disk is not configured as part of Oracle ASM." >> "${TMP_FILE}") 
+                        insert_break
+                fi
+
+                cat "${TMP_FILE}" | less
+                
+            else
+                clear
+                printf "%s\n" ${DIV}
+                printf "%s\n" "Length of device ID not acceptable or device ID does not begin with [3600]"
+                printf "%s\n" ${DIV}
+                local MYDISK=""
+                return 1
+        fi
+done
+
+return 0
+}
+
+check-blkdev-state ()
+## Function used to check each "sdXXX" device found under /sys/block/DEVICE_NAME
+## If device is found to be stale, in other words not running, a message will
+## print the name of block device and state that it is not running 
+{
+local GREP_OPTIONS="-r -E --color=never"
+local BLOCK_DEV_LIST=$(ls /sys/block/ | grep sd)
+unset BLK_STATUS
+
+for DEVICE in ${BLOCK_DEV_LIST}; 
+    do
+        egrep --quiet "running" "/sys/block/${DEVICE}/device/state"; RET_CODE=$?
+               
+            if [ ! "${RET_CODE}" = "0" ]; then
+                printf "%s\n" "Block device: ${DEVICE} is not running."; 
+                BLK_STATUS=1
+            fi
+    done
+    
+    ## If any devices are in a non-running status, print Warning message
+    if [ "${BLK_STATUS}" = "1" ]; then
+        printf "%s\n" "WARN: At least one block device was found in state other than RUNNING."
+    fi        
+}
+### Reminder message to setup the environment
+clear
+printf "%s\n" ${DIV}
+printf "%s\n" "##### Reminder ##### : Please, run dr-setup-environment to set DR Model : #####"
+printf "%s\n" ${DIV}
+
+## Menu for accessing various Security/Sox directory, and executing 
+## sox/security tools
+
+security-menu ()
+
+{
+
+clear
+printf "%s\n" "################################################################################"
+printf "%s\n" "####### /sa Security/SOX Directory Locations ###################################"
+printf "%-5s %s\n" "A)" "Change Management Records Directory for SOX Monthly CRs"
+printf "%-5s %s\n" "B)" "SOX Current Configuration Baseline Directory"
+printf "%-5s %s\n" "C)" "Security Reports Directory for Production systems with SOX Apps"
+printf "%-5s %s\n" "D)" "All Security Reports Directory"
+printf "%-5s %s\n" "E)" "San Mateo Security Reports Directory"
+printf "%-5s %s\n" "F)" "Engineering Security Reports Directory"
+printf "%-5s %s\n" "G)" "Security Check Script for Solaris - using sudo"
+printf "%-5s %s\n" "H)"  "Security Check Script for Linux - using sudo"
+printf "%-5s %s\n" 
+printf "%s\n" "################################################################################"
+printf "%s\n" ""
+printf "%s" "Please select one item from the menu (i.e.: A, B, C, D... ): "
+unset SEC_MENU_ITEM
+
+while [[ -z "${SEC_MENU_ITEM}" ]]; 
+do
+    read SEC_MENU_ITEM
+    local SEC_MENU_ITEM=$(echo "${SEC_MENU_ITEM}" | tr [:upper:] [:lower:] )
+
+    case "${SEC_MENU_ITEM}" in
+        a)
+            sox-cr-dir
+            ;;
+        b)
+            sox-cf-base-dir
+            ;;
+        c)
+            sox-rep-dir
+            ;;
+        d)
+            sec-rep-dir
+            ;;
+        e)
+            sec-sm-rep-dir
+            ;;
+        f)
+            sec-eng-rep-dir
+            ;;
+        g)
+            sec-chk-solaris
+            ;;
+        h)
+            sec-chk-linux
+            ;;
+        *)   
+            printf "%s\n" "Not sure what your selection is."
+            RET_CODE=1
+        esac
+done
+
+return "${RET_CODE:-0}"
+
+}
+
+get-server-by-eir ()
+###-------------------------------------------------------------------------###
+#### Responsiveness of this function varies based on performance of NFS   #####
+#### and factors such as number of systems in the suppplied query         #####
+###-------------------------------------------------------------------------###
+## Your milage may vary with regard to how quickly results are returned
+## A lot depends on the responsiveness of NFS, and the shear number of files
+## that are scanned for hcs.info bits, after the 'HOST_ARRAY' is assigned
+
+{
+local MYOS=$(uname)
+
+## We need to make sure that we are running Linux and
+## that bash is our current shell
+## If OS is not linux, or you are not in bash, need to stop here
+if [[ ! "${MYOS}" =~ "[Ll]inux" || -z "${BASH}" ]];
+then
+    printf "%s\n" "Either, you are not in BASH, or you are not using Linux. Exiting..."
+    return 1
+fi
+
+local GREP_OPTIONS="-r -E --color=never"
+local GREP_RANGE="--before-context=7 --after-context=7"
+## local DEBUG="0"      ## Not used in this function
+local DIV=$(printf "%80s\n"|tr ' ' - )
+local THIS_HOST=$(hostname)
+local EACH_HOST=""
+local EIR_NUM=""
+local ENV=""
+local HOST_ARRAY=""
+local FILENAME_ARRAY=""
+local DETAILS_YESNO=""
+local SERVICE_DIR=/sa/info/services
+local SERVICE_VAR_DIR=${SERVICE_DIR}/var
+local EIR_INFO_FILE=${SERVICE_VAR_DIR}/hcsAudit.serviceTable.loaddata
+local INFODIR=/sa/info/services/incoming
+local PREVIOUS_WORKDIR=${PWD}
+
+
+## Modify HCSINFO_FIELDS to your liking, in order to get the information
+## that you may want out of hcs.info
+local HCSINFO_FIELDS="hcsServiceClass|hcsServiceDetail|hcsServiceApp|hcsServiceEnv|hcsServiceIP|hcsServiceTeam|hcsServiceSupportGroup"
+local PREFIX="hcsservices-hostinfo-"
+# unset HOST_ARRAY
+
+## If EIR number is not 4 characters long or is not a valid number,
+## we will try again, over and over until we get a valid 4 digit number
+while [[ -z "${EIR_NUM}" ]]; 
+    do
+        clear
+            printf "%s" "Please enter Application EIR Number (i.e. 1111): "; read EIR_NUM
+            printf "%s" "Select Evironment, empty for ALL ([C]cat, [D]dev, [P]prod, [S]sit): "; read ENV
+
+        ## Here we need to make sure that our EIR number matches basic
+        ## checks, like its length and the fact that it is indeed a number
+        if [[ "${EIR_NUM//[0-9]*}" = "" ]] && [[ "${#EIR_NUM}" -eq "4" ]];
+            then         
+                printf "%s\n" "Valid Format... Checking... Please be patient..."
+                local FILENAME="/tmp/${EIR_NUM}.service.info"
+                
+                case "${ENV}" in
+                C|c) ## Environment is CAT
+                        local ENV="cat"
+                    ;;
+                D|d)  ## Environment is DEV
+                        local ENV="dev"
+                    ;;
+                P|p) ## Environment is PROD
+                        local ENV="prod"
+                    ;;
+                S|s)  ## Environment is DEV
+                        local ENV="sit"
+                    ;;
+                *)  ## Environment is ALL
+                        local ENV=""
+                    ;;                    
+                esac
+                
+            else
+                printf "%s\n" "Invalid Format... Try Again..."; sleep 2
+                unset EIR_NUM
+        fi
+    done  
+
+cd "${INFODIR}"
+
+## We first build an Array with list of servers that we find for the EIR_NUM
+## which we supplied at the beginning of the function
+## list consists of hostname, one per line
+## The input from which the list is built is defined in 'EIR_NUM' and'ENV' vars
+
+local HOST_ARRAY=( $(/usr/bin/awk '$5 ~/'"$ENV"'/ && $7 ~ /'"$EIR_NUM"'/ {print $1}' "${EIR_INFO_FILE}" | sort -u))
+## local HOST_ARRAY=( $(cat "${EIR_LOOKUP}" | egrep "\W${EIR_NUM}\W" | egrep "${ENV}" | cut -f1 | sort -u) )
+
+if [[ ${#HOST_ARRAY[@]} -le "1" ]]; 
+    then
+        printf "%s\n" ${DIV}
+        printf "%s\n" "Unable to locate any servers for given EIR # ${EIR_NUM} Cowardly bailing..."
+        printf "%s\n" ${DIV}
+        return 1    
+fi
+
+## We format and present output here, we also send a copy of the server list
+## which we store in HOST_ARRAY to a file FILENAME
+printf "%s\n\n"
+printf "%s\n" ${DIV}
+printf "%s\n" "Servers that appear to belong to EIR # ${EIR_NUM} added to ${FILENAME}"
+printf "%s\n" ${DIV}
+printf "%s\n" "${HOST_ARRAY[@]}" | tee "${FILENAME}"
+printf "%s\n" ${DIV}
+printf "%s\n\n"
+
+printf "%s\n" ${DIV}
+printf "%s\n" "### Would you like to see Details for EIR # ${EIR_NUM}? ###"
+printf "%s\n" "### No input will be treated as if you answered NO. ###"
+printf "%s\n" ${DIV}
+printf "%s" "[Y] More Details, [N] Hostnames are enough: "; read DETAILS_YESNO
+
+    case "${DETAILS_YESNO}" in
+    [Yy])
+        ## We do not need to do anything further here...
+        ;;
+    [Nn])
+        cd "${PREVIOUS_WORKDIR}"
+        return 0
+        ;;
+    *)
+        cd "${PREVIOUS_WORKDIR}"
+        printf "%s\n" "Your choice is not understood. Assuming answer was [NO]."
+        return 1   
+        ;;
+    esac
+
+FILENAME_ARRAY=()
+for EACH_HOST in "${HOST_ARRAY[@]}"
+    do 
+    local FILENAME=$(ls "${PREFIX}${EACH_HOST}"_*)
+    FILENAME_ARRAY+=( "${FILENAME}" )
+    done
+    
+##    echo "${FILENAME_ARRAY[@]}"
+    
+for EACH_HOST in "${FILENAME_ARRAY[@]}"
+    do
+        printf "%s\n" ${DIV}
+        printf "\t%s\n" ">>>> BEGIN hcs.info Details for host: ${EACH_HOST} <<<<"
+        printf "%s\n" ${DIV}
+        ## DO NOT modify anything here, if you want to change your selection
+        ## instead, play with the 'HCSINFO_FIELDS' and 'GREP_RANGE' at the top
+        egrep ${GREP_RANGE} --regexp=hcsServiceEIR=\'"${EIR_NUM}"\' "${EACH_HOST}" \
+        | egrep "${HCSINFO_FIELDS}" | sed -e 's/\#\#.*\#\#//g' -e 's/  *//g'       
+        printf "%s\n" ${DIV}
+        printf "\t%s\n" ">>>> END hcs.info Details for host: ${EACH_HOST} <<<<"
+        printf "%s\n" ${DIV}        
+        printf "%s\n\n"
+    done
+
+# unset HOST_ARRAY
+# unset FILENAME_ARRAY
+## Return to our previous work directory
+cd "${PREVIOUS_WORKDIR}"
+return 0
+}
