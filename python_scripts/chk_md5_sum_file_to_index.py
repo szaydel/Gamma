@@ -46,7 +46,7 @@ def get_timestap(fil):
     tstamp = print(datetime.datetime.fromtimestamp(os.path.getmtime(fil)).strftime(t_formt))
     return(tstamp)
     
-def dr_version_exists(fil,sfx):
+def dr_version_exists(fil,sfx):   
     ## Basic details about Production version of the file
     print(80 * '#')
     print_last_mod('PROD:',fil)
@@ -105,5 +105,3 @@ for file in prod_f:
     check_md5sum('/tmp/chksum.index',file)
     begin_end('End')
     new_line('')
-    #print_last_mod('P:',file)
-    #get_timestap(file)
