@@ -1,0 +1,40 @@
+
+sync_boot ()
+## Function is used to duplicate /boot, which should be
+## unmounted prior to this function running
+{
+if [[ -b "${SRCBOOT}" && -b "${MIRBOOTDM}" ]]; then
+        local DD_CMD=/bin/dd
+        printf "%s\n" "###############################################################################"
+        printf "%s\n" "[INFO] Performing copy using ${DD_CMD} of /boot..."
+        printf "%s\n" "###############################################################################"
+        unmount_boot || return 1        
+        "${DD_CMD}" if="${SRCBOOT}" of="${MIRBOOTDM}" bs=1M
+        RET_CODE=$?
+    else
+        printf "%s\n" "###############################################################################"
+        printf "%s\n" "[WARNING] It appears that ${MIRBOOTDM} is invalid." 
+        printf "%s\n" "[WARNING] Please check your SAN_BOOT device."
+        printf "%s\n" "###############################################################################"
+        exit 1
+        RET_CODE=1
+fi
+
+if [ "${RET_CODE}" -eq "0" ]; then
+        ## We are labeling our /boot filesystem [partition 1] with "SAN_BOOT"
+        ## just for ease of identification in the future
+        local LABEL_CMD=/sbin/tune2fs
+        "${LABEL_CMD}" -L "SAN_BOOT" "${MIRBOOTDM}" &> /dev/null
+        remount_boot || printf "%s\n" "Failed to re-mount directory /boot, Please check manually."
+        printf "%s\n" "###############################################################################"
+        printf "%s\n" "Duplicated local ${SRCBOOT} to SAN ${MIRBOOTDM} Successfully."
+        printf "%s\n" "###############################################################################"
+     else
+        remount_boot || printf "%s\n" "Failed to re-mount directory /boot, Please check manually."
+        printf "%s\n" "###############################################################################"
+        printf "%s\n" "Duplication from local ${SRCBOOT} to SAN ${MIRBOOTDM} Failed. Exiting..."
+        printf "%s\n" "###############################################################################"
+fi
+
+return "${RET_CODE}"
+}

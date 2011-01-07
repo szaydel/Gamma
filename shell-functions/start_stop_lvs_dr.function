@@ -1,0 +1,57 @@
+start_stop_lvs ()
+{
+## Function is used to start and stop Logical Volumes
+## passed to this function as an array
+## Normally, the function should be unsed as follows:
+## start_stop_lvs online "${ARRAYNAME[@]}" to start Volumes
+## start_stop_lvs offline "${ARRAYNAME[@]}" to stop Volumes
+
+local LV_NAME=""
+local ACTION="$1"
+shift 1
+local LV_ARRAY=("$@")
+# local TIMEOUT=5
+    ## Define Action we are expecting to perform, should be
+    ## online '-ay', or offline '-an'
+    if [[ "${ACTION}" = "offline" ]]; then
+        local ACTION=-an
+        local LV_STATE="Offline"
+    elif [[ "${ACTION}" = "online" ]]; then
+        local ACTION=-ay
+        local LV_STATE="Online"
+    else
+        printf "%s\n" "Unexpected parameter ${ACTION} was passed to this function. Cannot continue."
+        return 1
+    fi
+
+    for LV_NAME in "${LV_ARRAY[@]}"
+        do
+            printf "%s\n" "[INFO] Changing state of ${MIRVOLGRP}/lv_${LV_NAME} to ${LV_STATE}" 
+            lvchange "${ACTION}" "${MIRVOLGRP}/lv_${LV_NAME}" &> /dev/null
+
+            sleep 2
+            ## lvchange "${ACTION}" ${MIRVOLGRP}/lv_${LV_NAME} &> /dev/null
+        done
+## We need to make sure Device-Mapper and UDEV have a chance to settle down
+printf "%s\n"
+printf "%s\n\n" "[INFO] Waiting for ${DELAY} seconds for Device-Mapper and UDEV to settle."
+sleep "${TIMEOUT}"
+
+    for LV_NAME in "${LV_ARRAY[@]}"
+        do
+        local SYM_LINK_LV_MIR="/dev/${MIRVOLGRP}/lv_${LV_NAME}"
+            ## Test if Symlink exists, assuming State required is Online
+            if [[ "${LV_STATE}" = "Online" && -b "${SYM_LINK_LV_MIR}" ]]; then
+                printf "%s\n" "[INFO] Logical Volume ${MIRVOLGRP}/lv_${LV_NAME} is now Online."
+            elif
+            ## Test if Symlink is gone, assuming State required is Offline
+                [[ "${LV_STATE}" = "Offline" && ! -b "${SYM_LINK_LV_MIR}" ]]; then
+                printf "%s\n" "[INFO] Logical Volume ${MIRVOLGRP}/lv_${LV_NAME} is now Offline."
+            else
+                printf "%s\n" "[WARNING] Logical Volume ${MIRVOLGRP}/lv_${LV_NAME} is not ${LV_STATE}."
+                local RET_CODE=1
+            fi
+        done
+return "${RET_CODE:-0}"
+}
+

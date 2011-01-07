@@ -1,0 +1,42 @@
+enable_lvs_on_boot_LUN ()
+
+{
+
+## Will take ALL arguments passed to this function and assume
+## that they are LV names excluding the 'lv_'
+## Expecting that script will pass one lv-name at a time
+## Main part of the script should use a for loop, to loop through
+
+local LV_NAME=$1
+local LV_PATH="/dev/mapper/${MIRVOLGRP}-lv_${LV_NAME}"
+
+## Verify if LV is online and is a block-device
+
+    if [[ ! -b "${LV_PATH}" ]]; then
+            local LV_OFFLINE=Y
+            printf "%s\n" "Logical Volume ${LV_NAME} in Volume Group ${MIRVOLGRP} not Active."
+            printf "%s %20s\n" "Bringing Online Logical Volume" "[[ lv_${LV_NAME} ]]"
+            sleep 2
+        else
+            printf "%s\n" "Logical Volume ${LV_NAME} in Volume Group ${MIRVOLGRP} is Active."
+    fi
+    
+## Enable LV if not already online
+    if [[ "${LV_OFFLINE}" = "Y" ]]; then
+        COUNTER=0
+        ## We will attempt this four times, and if unsuccessful 
+        ## after four attempts we will bail with Return Code 1
+        while [[ ! -b "${LV_PATH}" && "${COUNTER}" -le 3 ]]
+        
+            do
+                echo /sbin/lvchange -ay "${MIRVOLGRP}/lv_${LV_NAME}"
+                sleep 1
+                COUNTER=$((COUNTER + 1))
+            done
+## Test one more time to see if LV now online and is a block-device
+    [[ ! -b "${LV_PATH}" ]] && RET_CODE=1
+
+    fi
+
+echo "${RET_CODE:-0}"
+}
