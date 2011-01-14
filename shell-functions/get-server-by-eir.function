@@ -1,10 +1,11 @@
 get-server-by-eir ()
 ###-------------------------------------------------------------------------###
-#### Do not run this on the system tied to an EIR you are trying to check #####
+#### Responsiveness of this function varies based on performance of NFS   #####
+#### and factors such as number of systems in the suppplied query         #####
 ###-------------------------------------------------------------------------###
 ## Your milage may vary with regard to how quickly results are returned
 ## A lot depends on the responsiveness of NFS, and the shear number of files
-## that are scanned while the array is being built
+## that are scanned for hcs.info bits, after the 'HOST_ARRAY' is assigned
 
 {
 local MYOS=$(uname)
@@ -25,8 +26,12 @@ local DIV=$(printf "%80s\n"|tr ' ' - )
 local THIS_HOST=$(hostname)
 local EACH_HOST=""
 local EIR_NUM=""
+local SERVICE_DIR=/sa/info/services
+local SERVICE_VAR_DIR=${SERVICE_DIR}/var
+local EIR_INFO_FILE=${SERVICE_VAR_DIR}/hcsAudit.serviceTable.loaddata
 local INFODIR=/sa/info/services/incoming
 local PREVIOUS_WORKDIR=${OLDPWD}
+
 
 ## Modify HCSINFO_FIELDS to your liking, in order to get the information
 ## that you may want out of hcs.info
@@ -38,12 +43,35 @@ unset HOST_ARRAY
 ## we will try again, over and over until we get a valid 4 digit number
 while [[ -z "${EIR_NUM}" ]]; 
     do
-clear; printf "%s" "Please enter Application EIR Number (i.e. 1111): "
-        read EIR_NUM
+        clear
+            printf "%s" "Please enter Application EIR Number (i.e. 1111): "; read EIR_NUM
+            printf "%s" "Select Evironment, empty for ALL ([C]cat, [D]dev, [P]prod, [S]sit): "; read ENV
+
+## Here we need to make sure that our EIR number matches basic
+## checks, like its length and the fact that it is indeed a number
         if [[ "${EIR_NUM}" =~ ^[0-9]+$ ]] && [[ "${#EIR_NUM}" -eq "4" ]];
-            then 
+            then         
                 printf "%s\n" "Valid Format... Checking... Please be patient..."
                 local FILENAME="/tmp/${EIR_NUM}.service.info"
+                
+                case "${ENV}" in
+                C|c) ## Environment is CAT
+                        local ENV="cat"
+                    ;;
+                D|d)  ## Environment is DEV
+                        local ENV="dev"
+                    ;;
+                P|p) ## Environment is PROD
+                        local ENV="prod"
+                    ;;
+                S|s)  ## Environment is DEV
+                        local ENV="sit"
+                    ;;
+                *)  ## Environment is ALL
+                        local ENV=""
+                    ;;                    
+                esac
+                
             else
                 printf "%s\n" "Invalid Format... Try Again..."; sleep 2
                 unset EIR_NUM
@@ -54,15 +82,11 @@ cd "${INFODIR}"
 
 ## We first build an Array with list of servers that we find for the EIR_NUM
 ## which we supplied at the beginning of the function
-## The last section looks weird, but it is necessary to deal with AutoAudit,
-## just in case AutoAudit cought your local system, and captured output of 'ps'
-## which is then stored in one of the files which of course we query here, and
-## it may give us a false positive
+## list consists of hostname, one per line
+## The input from which the list is built is defined in 'EIR_NUM' and'ENV' vars
 
-## The last part of this looks weird 'grep -v "${THIS_HOST}"', 
-## but it is necessary, just in case AutoAudit cought your local system, while
-## you are running this function and captured output of 'ps'
-local HOST_ARRAY=( $(find . -name "${PREFIX}*" -exec egrep --regexp="hcsServiceEIR='${EIR_NUM}'" -ls {} \; | sed -e 's/\.\///g' -e 's/[-_]/ /g' | awk '{print $3}' | grep -v "${THIS_HOST}" ))
+local HOST_ARRAY=( $(/usr/bin/awk '$5 ~/'"$ENV"'/ && $7 ~ /'"$EIR_NUM"'/ {print $1}' "${EIR_INFO_FILE}" | sort -u))
+## local HOST_ARRAY=( $(cat "${EIR_LOOKUP}" | egrep "\W${EIR_NUM}\W" | egrep "${ENV}" | cut -f1 | sort -u) )
 
 if [[ ${#HOST_ARRAY[@]} -le "1" ]]; 
     then
@@ -77,14 +101,23 @@ printf "%s\n" "Servers that appear to belong to EIR # ${EIR_NUM}"
 printf "%s\n" "${HOST_ARRAY[@]}" | tee "${FILENAME}"
 printf "%s\n\n"
 
+FILENAME_ARRAY=()
 for EACH_HOST in "${HOST_ARRAY[@]}"
+    do 
+    local FILENAME=$(ls "${PREFIX}${EACH_HOST}"_*)
+    FILENAME_ARRAY+=( "${FILENAME}" )
+    done
+    
+##    echo "${FILENAME_ARRAY[@]}"
+    
+for EACH_HOST in "${FILENAME_ARRAY[@]}"
     do
         printf "%s\n" ${DIV}
         printf "\t%s\n" ">>>> BEGIN hcs.info Details for host: ${EACH_HOST} <<<<"
         printf "%s\n" ${DIV}
         ## DO NOT modify anything here, if you want to change your selection
         ## instead, play with the 'HCSINFO_FIELDS' and 'GREP_RANGE' at the top
-        egrep ${GREP_RANGE} --regexp=hcsServiceEIR=\'"${EIR_NUM}"\' "${PREFIX}""${EACH_HOST}"_* \
+        egrep ${GREP_RANGE} --regexp=hcsServiceEIR=\'"${EIR_NUM}"\' "${EACH_HOST}" \
         | egrep "${HCSINFO_FIELDS}" | sed -e 's/\#\#.*\#\#//g' -e 's/  *//g'       
         printf "%s\n" ${DIV}
         printf "\t%s\n" ">>>> END hcs.info Details for host: ${EACH_HOST} <<<<"
@@ -92,6 +125,8 @@ for EACH_HOST in "${HOST_ARRAY[@]}"
         printf "%s\n\n"
     done
 
+unset HOST_ARRAY
+unset FILENAME_ARRAY
 ## Return to our previous work directory
 cd "${PREVIOUS_WORKDIR}"
 return 0
