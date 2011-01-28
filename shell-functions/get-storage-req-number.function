@@ -1,0 +1,58 @@
+#!/bin/bash
+get_request_num ()
+{
+
+local counter="0"
+SR_NUM=""
+SR_ENV=""
+while [[ "${counter}" -lt 3 && -z "${SR_NUM}" ]]
+    do
+        printf "%s" "Please enter Storage Request Number (i.e. 9999): "; read SR_NUM
+        if [[ -z "${SR_NUM}" ]]; then
+            counter=$((counter+1))
+            printf "%s\n\n" "[Try ${counter}] Looks like the Storage Request Number is missing. Please try again."
+        else
+            while [[ -z "${SR_ENV}" ]]
+                do
+                    printf "%s\n" "Select Evironment, for which storage is being provisioned: ([C]cat, [D]dev, [P]prod, [S]sit): "; read SR_ENV
+
+                    if  [[ ! "${SR_ENV}" =~ [CcDdPpSs] ]]; then
+                        printf "%s\n" "Environment is not one of the options. Enter ['Q','q'] to quit, or select Environment to continue."
+                    fi
+
+                    ## If the environment does not match one of the expected values, raise an error
+                    ## Also, we need to offer an option to quit at this point, if the user is unsure
+
+                    case "${SR_ENV}" in
+                    C|c) ## Environment is CAT
+                            SR_ENV="cat"
+                        ;;
+                    D|d)  ## Environment is DEV
+                            SR_ENV="dev"
+                        ;;
+                    P|p) ## Environment is PROD
+                            SR_ENV="prod"
+                        ;;
+                    S|s)  ## Environment is DEV
+                            SR_ENV="sit"
+                        ;;
+                    Q|q)  ## User chose to quit
+                            RET_CODE="1"
+                        ;;
+                    *)  ## Environment is ALL
+                            SR_ENV=""
+                        ;;
+                    esac
+
+
+                done
+        fi
+    done
+
+return "${RET_CODE:-0}"
+}
+
+get_request_num || exit 1
+echo "We are outside the function..."
+echo $SR_NUM $SR_ENV
+

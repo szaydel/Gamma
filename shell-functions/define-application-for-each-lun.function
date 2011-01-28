@@ -1,0 +1,121 @@
+#!/bin/bash
+LUN_RAW_INPUT_FILE=""
+DEBUG=1
+build_lun_arrays ()
+
+{
+### Build our LUN Array based on RAW input file - testing with /tmp/asm_setup_input.raw
+### We need two ARRAYS one for FRA disks and one for DB disks
+
+### Also we create a variable with the count of LUNs in the list
+### which we will later use to compare against the count of verified LUNs
+### those which we know have four individual paths
+### 'TOTAL_LUN_COUNT' should contain a sum of LUNs in the two variables :
+### 'DATA_LUN_COUNT' and 'FRA_LUN_COUNT'
+
+LUN_RAW_INPUT_FILE="/sa/teams/storage/site-local/requests/${SR_NUM}/vmax-allocate.output.report"
+if [[ ! -f "${LUN_RAW_INPUT_FILE}" ]]; then
+    LUN_RAW_INPUT_FILE=""
+    printf "%s\n" \
+    "################################################################################" \
+    "#### CRITICAL: Unable to locate report file for SR ${SR_NUM}" \
+    "################################################################################"
+    local counter="0"
+    while [[ "${counter}" -lt 3 && -z "${LUN_RAW_INPUT_FILE}" ]];
+        do
+            printf "%s\n%s\n" "" "################/ Try [$(($counter+1))] Please provide Full Path to SR file /#################"
+            printf "%s" ">>> "; read LUN_RAW_INPUT_FILE
+            local counter=$(($counter+1))
+        done
+    if [[ "${counter}" -eq 3 && ! -f "${LUN_RAW_INPUT_FILE}" ]]; then
+        local RET_CODE="1"
+        printf "%s\n" \
+        "################################################################################" \
+        "#### CRITICAL: Unable to locate report file for SR ${SR_NUM}" \
+        "################################################################################"
+        return "${RET_CODE}"
+    fi
+fi
+
+DATA_LUN_LUST=()
+FRA_LUN_LIST=()
+OCR_LUN_LIST=()
+
+local ALL_LUNS=( $(/usr/bin/egrep "Data" "${LUN_RAW_INPUT_FILE}" | /usr/bin/awk '{print $NF}' | /usr/bin/sort -u) )
+## printf "%s\n" "${ALL_LUNS[@]}"
+
+for line in "${ALL_LUNS[@]}"
+    do
+        printf "%s\n" "##############/ Please define Application for the following LUN /###############"
+        cat "${LUN_RAW_INPUT_FILE}" | /usr/bin/egrep "${line}" | /usr/bin/sed -e "s/  */ /g"
+        printf "%80s\n" " "|tr " " "#"
+        ## We have to make sure that we reset the value of 'LUN_FUNCTION' for each LUN
+        ## Normally, on our systems all LUNs begin with '3', which we have to prepend
+        ## if we do not do this, LUN will not be provisioned correctly
+        local line="3${line}"
+        local LUN_FUNCTION=""
+        local counter="0"
+        while [[ "${counter}" -lt 3 && -z "${LUN_FUNCTION}" ]];
+            do
+                printf "%s" "Possible applications for the LUN are ([D]Data,[F]FRA,[O]OCR), select one: "; read LUN_FUNCTION
+                printf "%s\n" ""
+                local counter=$((counter+1))
+                if [[ "${counter}" -eq 3 && -z "${LUN_FUNCTION}" ]]; then
+                    printf "%s\n" "Unable to continue without defining application for LUN. Exiting."
+                    local LUN_FUNCTION="q"
+                fi
+
+                    case "${LUN_FUNCTION}" in
+                        D|d) ## If LUN is intended to be a Data LUN
+                                DATA_LUN_LIST+=(${line})
+                            ;;
+                        F|f) ## If LUN is intended to be a Flash Recovery Archive LUN
+                                FRA_LUN_LIST+=(${line})
+                            ;;
+                        O|o) ## If LUN is intended to be an OCR LUN
+                                OCR_LUN_LIST+=(${line})
+                            ;;
+
+                        Q|q) ## User chose to quit
+                                local RET_CODE="1"; return "${RET_CODE}"
+                            ;;
+                        *) ## Unknown option selected
+                                printf "%s\n" "Try [$(($counter+1))] Selection not one of available options."
+                                local LUN_FUNCTION=""
+                            ;;
+                        esac
+            done
+    done
+
+## Individual ARRAY for DATA LUNs being provisioned to the cluster
+DATA_LUN_LIST=( $(echo "${DATA_LUN_LIST[@]}" | tr '[:upper:]' '[:lower:]') )
+## Individual ARRAY for FRA LUNs being provisioned to the cluster
+FRA_LUN_LIST=( $(echo "${FRA_LUN_LIST[@]}" | tr '[:upper:]' '[:lower:]') )
+## Individual ARRAY for OCR LUNs being provisioned to the cluster
+OCR_LUN_LIST=( $(echo "${OCR_LUN_LIST[@]}" | tr '[:upper:]' '[:lower:]') )
+
+## We determine a sum of 'DATA_LUN_COUNT' and 'FRA_LUN_COUNT', and substitute '0',
+## if either variable is not present, which may be because only DATA or only
+## FRA LUNs are being provisioned
+TOTAL_LUNS=$(( ${#FRA_LUN_LIST[@]} + ${#DATA_LUN_LIST[@]} + ${#OCR_LUN_LIST[@]} ))
+TOTAL_ORIG_LUNS="${#ALL_LUNS[@]}"
+
+printf "%s\n" "################/ Summary of assigned Data, FRA and OCR LUNs /##################"
+printf "%s %22s\n" "Total of DATA LUNs:" "[${#DATA_LUN_LIST[@]}]"
+printf "%s %23s\n" "Total of FRA LUNs:" "[${#FRA_LUN_LIST[@]}]"
+printf "%s %23s\n" "Total of OCR LUNs:" "[${#OCR_LUN_LIST[@]}]"
+printf "%s %8s\n" "Number of unique LUNs from Input:" "[${TOTAL_ORIG_LUNS}]"
+printf "%s %8s\n" "Number of LUNs to be Provisioned:" "[${TOTAL_LUNS}]"
+printf "%80s\n" " "|tr " " "#"
+
+## If we have a mismatch between input and output LUN count, we cannot continue
+if [[ ! "${TOTAL_LUNS}" -eq "${TOTAL_ORIG_LUNS}" ]]; then
+    printf "%s\n" "Number of input LUNs ${TOTAL_ORIG_LUNS} not equal to assigned LUNs ${TOTAL_LUNS}"
+    local RET_CODE="1"
+fi
+
+return "${RET_CODE:-0}"
+}
+
+build_lun_arrays || exit 1
+

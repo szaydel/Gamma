@@ -1,0 +1,66 @@
+#!/bin/bash
+
+validate_lun_paths ()
+
+{
+### We read the multipath output file and extract devices for each multipath
+### target in this format '0:0:0:0' expecting to get a list of 4 devices
+### These are wrapped into one array, and for each item we validate that the
+### device is functional
+
+### Also we create a variable with the count of LUNs in the list
+### which we will later use to compare against the count of verified LUNs
+### those which we know have four individual paths
+### 'TOTAL_LUN_COUNT' should contain a sum of LUNs in the two variables :
+### 'DATA_LUN_COUNT' and 'FRA_LUN_COUNT'
+
+[[ "${DEBUG}" -ge "1" ]] && printf "%s\t%s\n" "${TIMESTAP} Function name : verify_lun_number_of_paths" >> "${INFO_LOG}"
+
+local counter="0"  ## We start out at zero, and expect to match the number with FRA_LUN_COUNT
+# clear
+
+for EACH_LUN in ${FRA_LUN_LIST[@]} ${DATA_LUN_LIST[@]} ${OCR_LUN_LIST[@]}
+    do
+    printf "%s\n" "DEV[${counter}]=${EACH_LUN}" | loginfo
+
+    ## Here we create an ARRAY 'SINGLE_PATH_ARRAY', which will contain four paths for each LUN
+    ## Our goal is to make sure that we have four paths to each LUN, in a running
+    ## state, and if not, we likely need to stop and do some manual troubleshooting
+
+    SINGLE_PATH_ARRAY=($(grep -A7 "${EACH_LUN}" "${MPINFO}" | egrep --regexp="([0-9]{0,2}:[0-9]{0,2})" | sed -e "s/[\_]/ /g" -e "s/^  *//g" | cut -d" " -f1))
+[[ "${DEBUG}" -ge "1" ]] && printf "%s\n" "Multipath registered ${#SINGLE_PATH_ARRAY[@]} paths to device /dev/mapper/${EACH_LUN}." >> "${INFO_LOG}"
+
+    printf "%s\n" "Individual Paths for DEV[${COUNTER}] :" | loginfo
+    printf "%s\n" "${SINGLE_PATH_ARRAY[@]}" | loginfo
+
+    ## First Check :: confirm that SINGLE_PATH_ARRAY has four elements in it
+    ## If it does, we assume that we have the right number of paths to proceed
+        if [[ "${#SINGLE_PATH_ARRAY[@]}" -eq "4" ]]; then
+            printf "%s\n\n" "Confirmed 4 available paths to Device." | loginfo
+            local counter=$((counter + 1))
+
+            ## Second Check :: Make sure that each path 'sd' is in a running state
+            ## If not, we should not continue because paths may be stale
+            for P in "${SINGLE_PATH_ARRAY[@]}"
+                do
+                    local R=$(cat "/sys/bus/scsi/devices/${P}/state")
+
+                    if [[ ! "${R}" = "running" ]]; then ## Should be in a running state
+                        printf "%s\n" "DEV[${counter}], PATH ${P} is not in a Running State. [Check Device!]"
+                        local RET_CODE=1
+                        break
+                    fi
+                done
+        else
+            printf "%s\n" "Expected number of paths to LUN ${EACH_LUN} must equal to 4." | loginfo
+            local RET_CODE=1
+            break
+        fi
+
+    done
+
+return "${RET_CODE:-0}"
+}
+
+build_lun_arrays || exit 1
+
