@@ -1,8 +1,12 @@
 #!/bin/bash
+TR=/usr/bin/tr
+SED=/usr/bin/sed
+SEP_LINE=$(printf "%80s\n"|tr ' ' '#')
 
 validate_lun_paths ()
 
 {
+local DMSETUP=/sbin/dmsetup
 ### We read the multipath output file and extract devices for each multipath
 ### target in this format '0:0:0:0' expecting to get a list of 4 devices
 ### These are wrapped into one array, and for each item we validate that the
@@ -14,14 +18,40 @@ validate_lun_paths ()
 ### 'TOTAL_LUN_COUNT' should contain a sum of LUNs in the two variables :
 ### 'DATA_LUN_COUNT' and 'FRA_LUN_COUNT'
 
-[[ "${DEBUG}" -ge "1" ]] && printf "%s\t%s\n" "${TIMESTAP} Function name : verify_lun_number_of_paths" >> "${INFO_LOG}"
+[[ "${DEBUG}" -ge "1" ]] && printf "%s\t%s\n" "${TIMESTAP} Function name : validate_lun_paths" >> "${INFO_LOG}"
 
 local counter="0"  ## We start out at zero, and expect to match the number with FRA_LUN_COUNT
 # clear
 
 for EACH_LUN in ${FRA_LUN_LIST[@]} ${DATA_LUN_LIST[@]} ${OCR_LUN_LIST[@]}
+
     do
+
     printf "%s\n" "DEV[${counter}]=${EACH_LUN}" | loginfo
+    printf "%s\n" "${SEP_LINE}"
+
+    ## Validate that 'dmsetup' is able to see the Multipath Device
+    ## this does not mean that the block device under '/dev/mapper' exists,
+    ## and we check for its existance also
+
+    "${DMSETUP}" info "${EACH_LUN}" > /dev/null; local RET_CODE="$?"
+    if [[ "${RET_CODE}" -ne "0" ]]; then
+        printf "%s\n" "[CRITICAL] DEV[${counter}] is not a VALID Device-Mapper Device. [Check Device!]"| loginfo
+        local RET_CODE="1"; break
+    elif
+        ## Validation of Device-mapper
+        [[ ! -b "/dev/mapper/${EACH_LUN}" ]]; then
+        printf "%s\n" "[CRITICAL] DEV[${counter}] missing Device-Mapper Block Device. [Check Device!]"| loginfo
+        local RET_CODE="1"; break
+    else
+        printf "%s\n" "[SUCCESS] DEV[${counter}] is a VALID Device-Mapper Device."| loginfo
+        local RET_CODE="0"
+    fi
+
+    printf "%s\n" "${SEP_LINE}"
+
+    ## If we fail our validation tests above, there is no sense to continue and waste any more time.
+    [[ "${RET_CODE}" -eq "1" ]] && return 1
 
     ## Here we create an ARRAY 'SINGLE_PATH_ARRAY', which will contain four paths for each LUN
     ## Our goal is to make sure that we have four paths to each LUN, in a running
@@ -29,7 +59,7 @@ for EACH_LUN in ${FRA_LUN_LIST[@]} ${DATA_LUN_LIST[@]} ${OCR_LUN_LIST[@]}
 
     SINGLE_PATH_ARRAY=($(grep -A7 "${EACH_LUN}" "${MPINFO}" | egrep --regexp="([0-9]{0,2}:[0-9]{0,2})" | sed -e "s/[\_]/ /g" -e "s/^  *//g" | cut -d" " -f1))
 [[ "${DEBUG}" -ge "1" ]] && printf "%s\n" "Multipath registered ${#SINGLE_PATH_ARRAY[@]} paths to device /dev/mapper/${EACH_LUN}." >> "${INFO_LOG}"
-
+    printf "%s\n" "${SEP_LINE}"
     printf "%s\n" "Individual Paths for DEV[${COUNTER}] :" | loginfo
     printf "%s\n" "${SINGLE_PATH_ARRAY[@]}" | loginfo
 
@@ -43,12 +73,16 @@ for EACH_LUN in ${FRA_LUN_LIST[@]} ${DATA_LUN_LIST[@]} ${OCR_LUN_LIST[@]}
             ## If not, we should not continue because paths may be stale
             for P in "${SINGLE_PATH_ARRAY[@]}"
                 do
-                    local R=$(cat "/sys/bus/scsi/devices/${P}/state")
+                    local STATE=$(cat "/sys/bus/scsi/devices/${P}/state")
 
-                    if [[ ! "${R}" = "running" ]]; then ## Should be in a running state
+                    if [[ ! "${STATE}" = "running" ]]; then ## Should be in a running state
+                        printf "%s\n" "${SEP_LINE}"
                         printf "%s\n" "DEV[${counter}], PATH ${P} is not in a Running State. [Check Device!]"
-                        local RET_CODE=1
+                        printf "%s\n" "${SEP_LINE}"
+                        local RET_CODE="1"
                         break
+                    else
+                        local RET_CODE="0"
                     fi
                 done
         else
@@ -56,11 +90,12 @@ for EACH_LUN in ${FRA_LUN_LIST[@]} ${DATA_LUN_LIST[@]} ${OCR_LUN_LIST[@]}
             local RET_CODE=1
             break
         fi
+    printf "%s\n" "${SEP_LINE}"
 
     done
 
 return "${RET_CODE:-0}"
 }
 
-build_lun_arrays || exit 1
+validate_lun_paths || exit 1
 
