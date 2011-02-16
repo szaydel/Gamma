@@ -1,0 +1,82 @@
+dr-grub-mod ()
+
+{
+    if [ $UID -ne 0 ]; then
+       printf "%s\n" "You are not currently root. Run this function as root."
+       return 1
+    fi
+
+## For the moment this section is not required, because only one type of GRUB
+## configuration exists, other than PROD
+#    if [ -z "${DR_ENV}" ]; then
+#       printf "%s\n" "DR_ENV variable is not set. Please, execute dr-setup-environment function."
+#       return 1
+    fi
+
+    local SYS_TYPE=$(/usr/sbin/dmidecode --string system-product-name)
+    local VM="VMware Virtual Platform"
+    local PHYS="ProLiant [A-Z]{1}.* G[0-9]"
+    local GREP_OPTIONS="-r -E --color=never"
+    local GRUB_CONF_DIR="/boot/grub"
+#    local GRUB_CONF_DIR="/tmp"
+    local GRUB_CONF_FILE="${GRUB_CONF_DIR}/menu.lst"
+    local ROOT_SAN=""
+    
+    ## Determine if server has /boot on local disk, which means
+    ## server is booting locally, and will need to have fstab modified
+    ## with a vg_rootsan diskgroup, instead of vg_rootdisk
+    if [[ $(egrep --regexp="\/d.*/c0.*p1" /etc/fstab 2>/dev/null) ]]; then
+            
+            ## Server is not booting to SAN Natively
+            local ROOT_SAN="Y"
+        else
+            ## Servcer is booting to SAN Natively, or local /boot is not on /dev/cciss/c0d0p1
+            local ROOT_SAN="N"
+    fi
+    
+    ## If system is a VM, we do not need to change to 'vg_rootsan'
+    if [[ "${SYS_TYPE}" = "${VM}" ]]; then
+    
+        printf "%s\n" "This is a Virtual Machine. ### DO NOT MODIFY GRUB for DR on ANY VM! ###"
+        RET_CODE=1
+    ## If system is Physical, we have two scenarios, one where server is
+    ## booting to SAN already, and one where it is booting to local disk
+    ## and we have to create a new diskgroup vg_rootsan, to which we copy
+    ## local os, and have to make sure that we update DR version of /etc/fstab
+    ## to reflect the different diskgroup name in the mountpoint
+    elif [[ "${SYS_TYPE}" =~ "${PHYS}" ]]; then
+    
+        case "${ROOT_SAN}" in
+        
+            Y)  ## If ROOT_SAN flag is set to YES, we change vg_rootdisk to vg_rootsan
+            
+                if [ ! -f "${GRUB_CONF_FILE}" ]; then
+                        printf "%s\n" "Looks like ${GRUB_CONF_FILE} is missing or not a regular file. Cannot continue."
+                        return 1
+                    else 
+                        sed -e "s/rootdisk/rootsan/g" "${GRUB_CONF_FILE}" > "${GRUB_CONF_FILE}.DR"
+                        printf "%s\n" "Modified ${GRUB_CONF_FILE} and wrote changes to ${GRUB_CONF_FILE}.DR."
+                        RET_CODE=0
+                fi
+            ;;
+            
+            N) ## If ROOT_SAN flag is set to NO, server should be booting to SAN aleady, and no changes required
+                printf "%s\n" "Server ${HOSTNAME} does not appear to have VG vg_rootsan. Cannot continue."
+                RET_CODE=1   
+            ;;
+            
+            *) ## We should only have a 'Y' or 'N'
+                printf "%s\n" "Unable to determine whether or not system has vg_rootsan. Cannot continue."
+                RET_CODE=1
+            ;;
+            
+        esac
+            
+    else
+            printf "%s\n" "System is unknown. Cannot continue."
+            
+            RET_CODE=1           
+    fi
+return "${RET_CODE:-1}" 
+
+}  

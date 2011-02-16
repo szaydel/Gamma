@@ -1,0 +1,23 @@
+#!/bin/bash
+## ZSH parameter substitution snippets
+
+## If foo is unset, print bar, otherwise nothing
+% print ${foo-bar}
+
+## If foo is set, but has no value, print bar
+% print ${foo:-bar}
+
+## If foo is set, and has value, print bar
+% print ${foo:+bar}
+
+## If foo is set and has value, will print all quoted text
+## and insert value of $foo
+% print ${foo+"Value of foo is: $foo"}
+
+## Parse the path /home/foo and only return "foo"
+% print ${MYPATH##*/}
+% print ${MYPATH:t}
+
+## Opposite of above Parse the path /home/foo and only return path before "foo"
+% print ${MYPATH%/*}
+% print ${MYPATH:h}

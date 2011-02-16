@@ -1,9 +1,9 @@
 #!/bin/bash
 ##: Title       : USPS Local Disk to SAN LUN Replication script for boot devices
 ##: Date Rel    : 10/01/2010
-##: Date Upd    : 12/02/2010
+##: Date Upd    : 12/03/2010
 ##: Author      : "Sam Zaydel" <sam.zaydel@usps.gov>
-##: Version     : 1.0.3
+##: Version     : 1.0.4
 ##: Release     : Beta
 ##: Description : 
 ##: Options     : 
@@ -26,8 +26,8 @@
 ## 12/02/2010 : Added LV-offline, LV-online Function
 ## Modified flush_mpath() function commenting out LVM bits
 ## Due to change to /boot mount, made adjustments to compensate
-##
-##
+## 12/03/2010 : Adjusted one of the tests confirming existance of block device
+## for variable 'MIRBOOTDM'
 ###############################################################################
 ################# Major objectives and expected behavior ######################
 ###############################################################################
@@ -80,23 +80,23 @@ TIMEOUT=5
 ###############################################################################
     ## If the 'MIRVOLGRP' variable does not exist, we cannot continue
     if [[ $(vgscan 2>/dev/null | grep -q "${MIRVOLGRP}"; echo $?) -ne "0" ]]; then
-        printf "%s\n" "CRITICAL: Unable to locate Volume Group ${MIRVOLGRP}. Cannot continue."
+        printf "%s\n" "[CRITICAL] Unable to locate Volume Group ${MIRVOLGRP}. Cannot continue."
         exit 1
     ## We cannot continue if our 'MIRBOOTWWN' variable is not defined
     elif [[ -z "${MIRBOOTWWN}" ]]; then
-        printf "%s\n" "CRITICAL: Unable to identify Device ID for our SAN Mirror. Cannot continue."
+        printf "%s\n" "[CRITICAL] Unable to identify Device ID for our SAN Mirror. Cannot continue."
         exit 1
     ## We cannot continue if for some reason our LUN does not appear to be a block device
     elif [[ ! -b "${MIRBOOTDISK}" ]]; then
-        printf "%s\n" "CRITICAL: SAN LUN does not appear to be a Block Device. Cannot continue."
+        printf "%s\n" "[CRITICAL] SAN LUN does not appear to be a Block Device. Cannot continue."
         exit 1  
     ## Here we test to make sure that our device ID is exactly 33 characters long
     elif [[ ! "${#MIRBOOTWWN}" -eq "33" ]]; then
-        printf "%s\n" "CRITICAL: Length of Device ID for our SAN Mirror is not correct. Cannot continue."
+        printf "%s\n" "[CRITICAL] Length of Device ID for our SAN Mirror is not correct. Cannot continue."
         exit 1
     ## Here we check if we can stat first partition on our SAN LUN
-    elif [[ $(stat "${MIRBOOTDM}"; echo $?) -ne 0 ]]; then
-        printf "%s\n" "CRITICAL: Unable to determine if SAN BOOT Device exists. Cannot continue."
+    elif [[ ! -b "${MIRBOOTDM}" ]]; then
+        printf "%s\n" "[CRITICAL] Unable to determine if SAN BOOT Device exists. Cannot continue."
         exit 1
 
     fi
@@ -246,7 +246,7 @@ local SYM_LINK_LVSNAP="/dev/${SRCVOLGRP}/lv_snap_${LV_NAME}"
  
 ## Remove the snapshot volume that was created
 printf "%s\n" "Snapshot Volume ${SRCVOLGRP}/lv_snap_${LV_NAME} is being removed, please wait..."
-COUNT=3  ## We will try to remove the snaptshot LV a total of 3 times 
+local COUNT=3  ## We will try to remove the snaptshot LV a total of 3 times 
 while [ -h "${SYM_LINK_LVSNAP}" -a "${COUNT}" -gt 0 ]
     do
         ## Because we do not want to keep snapshots for any period of time,
@@ -255,7 +255,7 @@ while [ -h "${SYM_LINK_LVSNAP}" -a "${COUNT}" -gt 0 ]
         ## We will also clean-up snapshots in the case something has gone wrong
         lvremove -f "${SYM_LINK_LVSNAP}" &> /dev/null
         sleep ${TIMEOUT}
-        COUNT=$((${COUNT}-1))
+        local COUNT=$((${COUNT}-1))
     done
 
 [ -h "${SYM_LINK_LVSNAP}" ]; RET_CODE=$?  ## If '0' is returned the snapshot is still there
@@ -458,11 +458,12 @@ local DD_MIRROR="/dev/mapper/${MIRVOLGRP}-lv_${LV_NAME}"
         fi
 }
 
-offline_lvs ()
-{
-local LV_NAME=$1
-lvchange -an ${MIRVOLGRP}/lv_${LV_NAME} &> /dev/null && printf "%s\n" "Volume ${MIRVOLGRP}/lv_${LV_NAME} is now Inactive..."
-}
+#offline_lvs ()
+#{
+#local LV_NAME=$1
+#local LVCH_CMD=/sbin/lvchange
+#"${LVCH_CMD}" -an ${MIRVOLGRP}/lv_${LV_NAME} &> /dev/null && printf "%s\n" "Volume ${MIRVOLGRP}/lv_${LV_NAME} is now Inactive..."
+#}
 
 ###############################################################################
 ### Step 3 - Begin execution of main part of the script

@@ -1,0 +1,28 @@
+#!/bin/bash
+##
+##
+##
+provision_lun ()
+
+{
+## Function will use variables set by earlier functions
+## along with two positional arguments passed to function by main script
+## to build argument list and pass them to the main code
+
+local EACH_LUN="$1"
+local ASM_FUNC="$2"
+
+printf "%s\n" "ARGS which we will pass to the main script :" \
+"--device=${EACH_LUN}" \
+"--asm-function=${ASM_FUNC}" \
+"--request-number=${SR_NUM}" \
+"--environment=${SR_ENV}" \
+"--eir-number=${EIR_NUM}" \
+"--app-name=${APP_NAME}" \
+"--provision"
+linesep
+
+local RET_CODE="$?"
+return "${RET_CODE:-0}"
+}
+

@@ -1,0 +1,34 @@
+            export GT_BLINK='\['"$(tput blink)"'\]' # Set “blink” attribute
+            export GT_REVERSE='\['"$(tput rev)"'\]' # Set “reverse” attribute
+            export GT_HIDDEN='\['"$(tput invis)"'\]' # Set “hidden” attribute
+            export GT_RESET='\['"$(tput sgr0)"'\]' # Reset all attributes
+            
+            export BLACK='\['"$(tput setaf 0)"'\]' #foreground to color #0 - black
+            export RED='\['"$(tput setaf 1)"'\]' #foreground to color #1 - red
+            export GREEN='\['"$(tput setaf 2)"'\]' #foreground to color #2 - green
+            export YELLOW='\['"$(tput setaf 3)"'\]' #foreground to color #3 - yellow
+            export BLUE='\['"$(tput setaf 4)"'\]' #foreground to color #4 - blue
+            export MAGENTA='\['"$(tput setaf 5)"'\]' #foreground to color #5 - magenta
+            export CYAN='\['"$(tput setaf 6)"'\]' #foreground to color #6 - cyan
+            export WHITE='\['"$(tput setaf 7)"'\]' #foreground to color #7 - white
+            export DEFAULT='\['"$(tput setaf 9)"'\]' #default foreground color
+            
+            export BG_BLACK='\['"$(tput setaf 0)"'\]' #background to color #0 - black
+            export BG_RED='\['"$(tput setaf 1)"'\]' #background to color #1 - red
+            export BG_GREEN='\['"$(tput setaf 2)"'\]' #background to color #2 - green
+            export BG_YELLOW='\['"$(tput setaf 3)"'\]' #background to color #3 - yellow
+            export BG_BLUE='\['"$(tput setaf 4)"'\]' #background to color #4 - blue
+            export BG_MAGENTA='\['"$(tput setaf 5)"'\]' #background to color #5 - magenta
+            export BG_CYAN='\['"$(tput setaf 6)"'\]' #background to color #6 - cyan
+            export BG_WHITE='\['"$(tput setaf 7)"'\]' #background to color #7 - white
+            export BG_DEFAULT='\['"$(tput setaf 9)"'\]' #default background color
+            
+            export EM_BLACK='\['"$(tput bold; tput setaf 0)"'\]' #foreground to color #0 - black
+            export EM_RED='\['"$(tput bold; tput setaf 1)"'\]' #foreground to color #1 - red
+            export EM_GREEN='\['"$(tput bold; tput setaf 120)"'\]' #foreground to color #2 - green
+            export EM_YELLOW='\['"$(tput bold; tput setaf 221)"'\]' #foreground to color #3 - yellow
+            export EM_BLUE='\['"$(tput bold; tput setaf 4)"'\]' #foreground to color #4 - blue
+            export EM_MAGENTA='\['"$(tput bold; tput setaf 5)"'\]' #foreground to color #5 - magenta
+            export EM_CYAN='\['"$(tput bold; tput setaf 6)"'\]' #foreground to color #6 - cyan
+            export EM_WHITE='\['"$(tput bold; tput setaf 7)"'\]' #foreground to color #7 - white
+            export EM_DEFAULT='\['"$(tput bold; tput setaf 9)"'\]' #default foreground color

@@ -1,0 +1,92 @@
+#!/bin/bash
+get_env_eir ()
+
+{
+## We need collect Environment and Application 'EIR'
+local counter="0"
+#SR_NUM=""
+SR_ENV=""
+
+local counter="0"
+
+while [[ -z "${EIR_NUM}" ]]
+    do
+        linesep
+        printf "%s" "Please enter Application EIR Number: "; read EIR_NUM
+
+        local EIR_NOALPHA=$(printf "${EIR_NUM}" | egrep -v "[[:alpha:]]")
+
+        ## If the field was left blank, prompt user
+        if [[ -z "${EIR_NUM}" ]]; then
+            printf "%s\n" "EIR Number cannot remain blank. Try Again."
+            EIR_NUM=""
+
+        ## If the field is longer than four characters, prompt user
+        elif [[ "${#EIR_NOALPHA}" -lt 4 ]]; then
+            printf "%s\n" "EIR Number should be 4 digits long. Try Again."
+            EIR_NUM=""
+
+        ## If EIR not a valid number, prompt user
+        elif [[ ! "${EIR_NUM}" -eq "${EIR_NUM}" ]]; then
+            printf "%s\n" "EIR Number does not appear to be valid. Try Again."
+            EIR_NUM=""
+        fi
+    done
+
+
+while [[ "${counter}" -lt 3 && -z "${SR_ENV}" ]]
+    do
+        linesep
+        printf "%s" "Select Evironment, for SR# ${SR_NUM}: ([C]cat, [D]dev, [P]prod, [S]sit): "; read SR_ENV
+        if  [[ ! "${SR_ENV}" =~ [CcDdPpSs] ]]; then
+            printf "%s\n" "Environment is not one of the options. Enter ['Q','q'] to quit, or select Environment to continue."
+        fi
+        linesep
+
+        ## If the environment does not match one of the expected values, raise an error
+        ## Also, we need to offer an option to quit at this point, if the user is unsure
+
+        case "${SR_ENV}" in
+        C|c) ## Environment is CAT
+                SR_ENV="cat"
+            ;;
+        D|d)  ## Environment is DEV
+                SR_ENV="dev"
+            ;;
+        P|p) ## Environment is PROD
+                SR_ENV="prod"
+            ;;
+        S|s)  ## Environment is DEV
+                SR_ENV="sit"
+            ;;
+        Q|q)  ## User chose to quit
+                RET_CODE="1"
+            ;;
+        *)  ## Environment is ALL
+                SR_ENV=""
+            ;;
+        esac
+    local counter=$((counter+1))
+    done
+
+if [[ ! -f "${EIR_TAB}" ]]; then
+    linesep
+    printf "%s\n" "[WARNING] Unable to locate EIR Table, file not found."
+    printf "%s" "Please, manually enter Acronym for EIR ${EIR_NUM}: "; read APP_NAME
+else
+    APP_NAME=$("${GREP}" "^${EIR_NUM}" "${EIR_TAB}" | "${CUT}" -d":" -f3)
+    fi
+
+## If the name is still not filled in, we will use a dummy name here
+## this is really the last resort
+if [[ -z "${APP_NAME}" ]]; then
+    APP_NAME="ZZZZ"
+fi
+
+return "${RET_CODE:-0}"
+}
+
+get_request_num || exit 1
+echo "We are outside the function..."
+echo $SR_NUM $SR_ENV
+

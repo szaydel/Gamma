@@ -24,9 +24,6 @@ $ awk '{$1=""; print}'
 cat filename | awk '{ if ( ( NR % 3 ) == 0 ) { printf("%s\n",$0) } else { printf("%s ",$0) } }'
 cat filename | awk '{ printf("%s ",$0); if ( NR%3 == 0 ) printf("\n") }'
 
-## use sed to join lines together
-
-for A in 2:0:5:952 2:0:4:952 0:0:3:952 0:0:2:952; do lsscsi -vlk "${A}"|sed -e :a -e '$!N; s/\n/ /; ta' | wc -l; done
 
 ## Execute a command with a timeout
 timeout 10 sleep 11
@@ -68,9 +65,9 @@ fi
 ## Until Loop
 
 until ping 56.224.33.1 -c 3 > /dev/null
-	do
+	do 			
 		echo "This is broke..."
-		sleep 2
+		sleep 2	
 	done
 
 echo "Seems to be working now..."
@@ -221,7 +218,7 @@ read -p "$*"
 	do
 	sudo passwd -r files -l "$I"
 	done
-
+	
 ## Compare two files and output 10000 lines
 ## ignoring anything starting with -d
 gdiff --unified=10000 compfile2 compfile1 | egrep -v '^-\d'
@@ -267,13 +264,13 @@ tar cf - testdir/testfile |gzip -9 > testdir/testfile.tar.gz
 ## Another way of combining find and tar
 tar -cvzf arch.tgz $(find /path/dir -not -type d)
 
-## Use tar to extract files from internet without saving file locally
-wget -O - http://example.com/a.gz | tar xz
+## Use tar to extract files from internet without saving file locally 
+wget -O - http://example.com/a.gz | tar xz 
 
 ## Use lofiadm to mount ISO filesystem on Solaris
 sudo mount -F hsfs -o ro `sudo lofiadm -a /export/home/szaydel/solaris/sol-10-u7-ga-sparc-dvd.iso /dev/lofi/1` /media/export
 
-## Clone a volume /dev/sda via ssh to file on remote system
+## Clone a volume /dev/sda via ssh to file on remote system  
 dd if=/dev/sda | gzip -c | ssh user@hostname 'dd of=/mnt/backups/sda.dd'
 
 ## Sorting by Rows
@@ -326,7 +323,7 @@ done
 ## Cleanup Firefox's Database
 find ~/.mozilla/firefox/ -type f -name "*.sqlite" -exec sqlite3 {} VACUUM \;
 
-## Use find with a pattern of file extensions
+## Use find with a pattern of file extensions 
 find . -regex '.*\(h\|cpp\)'
 
 ## Reconfigure LLT - Change interface
@@ -355,15 +352,15 @@ sudo mdadm --detail --scan --verbose > /tmp/mdadm.conf
 
 ## Less pager and grep used together
 argv=("$@"); rest=${argv[@]:1}; less -JMN +"/$1" `grep -l $1 $rest`
-## If an alias was created 'lgrap' then the following would work:
+## If an alias was created 'lgrap' then the following would work: 
 lgrep Exception $(find . -name "qc*.log")
 
-## Rsync and find used together
+## Rsync and find used together 
 find . -name "whatever.*" -print0 | rsync -av --files-from=- --from0 ./ ./destination/
 
 ## Use netcat to copy entire disk
-SOURCE: dd if=/dev/sda bs=16065b | netcat ip-target 1234
-TARGET: netcat -l -p 1234 | dd of=/dev/mapper/laptop bs=16065b
+SOURCE: dd if=/dev/sda bs=16065b | netcat ip-target 1234 
+TARGET: netcat -l -p 1234 | dd of=/dev/mapper/laptop bs=16065b 
 STATS on target: watch -n60 -- kill -USR1 $(pgrep dd)
 
 ## GNUPG Encrypting/Decrypting and Sending
@@ -424,9 +421,9 @@ case $MYREL in
                 echo "Unsupported release: $MYREL"
                 exit 1
                 ;;
-
-
-
+                
+                
+                
 ## Use systool to quickly identify WWNNs
 systool -c fc_host -v | grep port_name | gawk {'print $3'} | sed 's/\"//g'
 
@@ -464,7 +461,7 @@ tail -f somefile | while read line ; do echo $line  ; sleep 1; done
 
 ## Use inq tool to find all clariion storage and print only the WWN
 inq -nodots -clar_wwn | grep -v "\/dev/sd" | awk '{printf("%s\n",$6)}'
-inq -nodots -clar_wwn | grep -v "\/dev/sd" | awk '{printf("%s\n3",$6)}' | egrep --regex "([0-9]|[a-z]){33}"| sort | uniq > /tmp/all-clar-devs.txt
+inq -nodots -clar_wwn | grep -v "\/dev/sd" | awk '{printf("%s\n3",$6)}' | egrep --regex "([0-9]|[a-z]){33}"| sort | uniq > /tmp/all-clar-devs.txt 
 
 ## Use sysfs to local ALL paths to a LUN when target and LUN are known
 ls -l /sys/devices/pci0000:00/0000:00:13.0/0000:*:00.*/host0/rport-0:0-*/target[0-3]:0:[0-5]/[0-2]:0:[0-5]:101/block*
@@ -494,33 +491,4 @@ for I in $(bzcat -c /var/log/messages-20100709.bz2 | egrep "Buffer I/O error on 
 ## Tie 'inq' output for Clariion to ASM diskgroup information using 'oracleasm' command
 NONPROD_ASM_ARRAY=( $(cat /tmp/san-clar_wwn-mep006.txt | egrep -E "sd" | sed -e "s/  */ /g" | cut -d " " -f6 | sed -e "s/^/3/g" | sort -u))
 for DISK in ${NONPROD_ASM_ARRAY[@]}; do oracleasm querydisk /dev/mapper/"${DISK}-part1"; done
-
-## Checking if a disk's partition table is not empty
-[[ $(sfdisk -l "/dev/mapper${EACH_LUN}"  | sed -e "s/\  */ /g" -e "s/[\,,\:]//g" | egrep -E "(83 Linux)|Empty") != "" && $(sfdisk -l "/dev/mapper${EACH_LUN}" | egrep -E "^\/dev/" | wc -l) ]]
-
-## Restart SUN SMF when doing svcs -xv shows any failed services
-## Always manually stop the services in question prior to doing this HUP
-kill -HUP /lib/svc/bin/svc.configd
-
-## Test list of servers - ssh access
-for A in $(cat /tmp/ifl-server.list|grep -v '^#'); do netcat -z -vv -w5 $A 22; done
-
-## Pulling serial number out of the bios
-hwinfo --bios|egrep -m 1 "Serial:"|cut -d\" -f 2
-
-## zsh re-write Array list items using for loop
-for A in "${MYARR[@]}"; do echo ${A/.usps.gov/}; done
-
-## bash return array index and values
-A=(one two three four)
-for i in "${!A[@]}"; do echo "$i" "${A[$i]}"; done
-0 one
-1 two
-2 three
-3 four
-
-## Take in list of 2 columns IP_add + hostname and rewrite in /etc/hosts format adding -dr-ilo suffix
-for a in ${arr_a[@]}; do b=$(grep $a dr-ilos.list | cut -d " " -f2) \
-a=$(echo $a | sed -e "s/$/-dr-ilo/g"); \
-echo -e "$b \t $a.usps.gov \t $a" ; done
 
