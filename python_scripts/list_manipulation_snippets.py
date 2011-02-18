@@ -54,3 +54,19 @@ f = open('/tmp/lists', 'w')
 for a in [" ".join(i) for i in itertools.combinations(x,4)]:
     f.write(a+'\n')
 f.close()
+
+def words(lines):
+    for line in lines:
+        for word in line.split(','):
+            yield word
+            
+def words(lines):
+    for line in lines:
+        for word in line.split():
+            yield word
+            
+f = open('/tmp/lists', 'r')
+count = 0
+for i in words(f.readlines()):
+    print([count],i)
+    count += 1
