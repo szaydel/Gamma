@@ -47,3 +47,10 @@ for a in itertools.combinations(x,4):
     h = " ".join(a)
     f.write(h+'\n')
 f.close()
+
+## Another variant of above, but this time the join operation is part of the
+## list comprehension inside the for loop
+f = open('/tmp/lists', 'w')
+for a in [" ".join(i) for i in itertools.combinations(x,4)]:
+    f.write(a+'\n')
+f.close()
