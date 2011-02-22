@@ -70,3 +70,7 @@ count = 0
 for i in words(f.readlines()):
     print([count],i)
     count += 1
+
+## Take a list and return index and value wrapping it into a dictionary
+h = ['red', 'green', 'orange', 'yellow']
+m = {str(x):y for x,y in enumerate(h)}
